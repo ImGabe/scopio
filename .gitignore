@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+dist/
+*.egg-info/
+build/
+scopio.db
+scopio.json
+scopio.csv
+scopio.md
+scopio_archive.*
+scopio.toml
+*.DS_Store

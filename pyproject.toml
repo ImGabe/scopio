@@ -1,0 +1,60 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "scopio"
+version = "0.1.1"
+description = "Code metrics auditor with SQLite history, diffs and quality gates."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [
+    { name = "Gabriel P. Monte", email = "gabrielpmonte@users.noreply.github.com" },
+]
+keywords = ["metrics", "code-quality", "ccn", "lizard", "scc", "audit", "ci"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = ["click>=8.1", "lizard>=1.7"]
+
+[project.urls]
+Homepage = "https://github.com/gabrielpmonte/scopio"
+Repository = "https://github.com/gabrielpmonte/scopio"
+Issues = "https://github.com/gabrielpmonte/scopio/issues"
+
+[project.scripts]
+scopio = "scopio.cli:cli"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-cov>=6",
+    "ruff>=0.8",
+    "mypy>=1.15",
+]
+[tool.hatch.build.targets.wheel]
+packages = ["scopio"]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP", "B", "PT", "RUF"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+ignore_missing_imports = true
+disallow_untyped_defs = false
+exclude = ["tests/"]
