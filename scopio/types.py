@@ -67,11 +67,11 @@ class AuditResult(TypedDict, total=False):
 
 
 class DiffDelta(TypedDict, total=False):
-    loc: int
+    loc: float
     loc_trend: float | None
     ccn: float
     ccn_trend: float | None
-    warnings: int
+    warnings: float
 
 
 class DiffSnapshot(TypedDict, total=False):

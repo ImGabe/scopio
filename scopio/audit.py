@@ -12,10 +12,11 @@ import tomllib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from .db import open_db
 from .formats import export_outputs
+from .types import AuditResult, GitInfo, LizardSummary, SccRecord
 
 
 class ConfigError(Exception):
@@ -68,7 +69,7 @@ def _run_cmd(path: Path, cmd: list[str]) -> str:
         return f"ERROR:{exc}"
 
 
-def _git_info(path: Path) -> dict[str, Any]:
+def _git_info(path: Path) -> GitInfo:
     if not (path / ".git").is_dir():
         return {
             "commits": 0,
@@ -115,7 +116,7 @@ def _tool_versions() -> dict[str, str]:
     return versions
 
 
-def _run_scc(proj_path: Path, excludes: list[str]) -> list[dict[str, Any]]:
+def _run_scc(proj_path: Path, excludes: list[str]) -> list[SccRecord]:
     cmd = [
         "scc",
         str(proj_path),
@@ -201,15 +202,17 @@ def _parse_lizard_output(output: str) -> dict[str, Any]:
     return {**totals, "files": file_metrics}
 
 
-def _run_lizard(proj_path: Path, extra_excludes: list[str]) -> dict[str, Any]:
+def _run_lizard(proj_path: Path, extra_excludes: list[str]) -> LizardSummary:
+    from typing import cast
+
     cmd = ["lizard", str(proj_path), *extra_excludes]
     res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
     if res.returncode != 0:
         return {"nloc": 0, "ccn": 0.0, "warnings": 0, "files": []}
-    return _parse_lizard_output(res.stdout)
+    return cast(LizardSummary, _parse_lizard_output(res.stdout))
 
 
-def _language_from_scc(scc_data: list[dict[str, Any]], ignored: set[str]) -> str:
+def _language_from_scc(scc_data: list[SccRecord], ignored: set[str]) -> str:
     valid = [d for d in scc_data if d.get("Name") not in ignored]
     candidates = valid if valid else scc_data
     if not candidates:
@@ -235,6 +238,53 @@ class MetricsAuditor:
         self.db_path = self.output_dir / "scopio.db"
         self._init_db()
 
+    _MIGRATIONS: ClassVar[list[tuple[int, str]]] = [
+        (
+            1,
+            """CREATE TABLE IF NOT EXISTS metrics (
+            audit_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project TEXT NOT NULL, language TEXT, files INTEGER, loc INTEGER,
+            code INTEGER, nloc INTEGER, ccn REAL, ccn_max INTEGER,
+            warnings INTEGER, commits INTEGER, last_commit_date TEXT, author TEXT,
+            branch TEXT, dirty INTEGER, commit_hash TEXT,
+            tool_versions TEXT, duration_seconds REAL,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_metrics_project ON metrics(project);
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_metrics_run
+            ON metrics(project, branch, commit_hash);""",
+        ),
+        (2, "ALTER TABLE metrics ADD COLUMN ccn_max INTEGER"),
+        (
+            4,
+            "ALTER TABLE metrics ADD COLUMN coverage REAL;"
+            + "ALTER TABLE metrics ADD COLUMN duplication REAL;"
+            + "ALTER TABLE metrics ADD COLUMN outdated_dependencies INTEGER",
+        ),
+        (
+            5,
+            """CREATE TABLE IF NOT EXISTS metrics_history (
+            audit_id INTEGER PRIMARY KEY, project TEXT NOT NULL,
+            language TEXT, timestamp DATETIME, loc INTEGER, ccn REAL, warnings INTEGER,
+            FOREIGN KEY(audit_id) REFERENCES metrics(audit_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_history_project
+            ON metrics_history(project, timestamp);""",
+        ),
+        (
+            6,
+            """CREATE TABLE IF NOT EXISTS file_metrics (
+            file_metric_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            audit_id INTEGER, project TEXT NOT NULL,
+            path TEXT NOT NULL, nloc INTEGER, ccn REAL, warnings INTEGER,
+            FOREIGN KEY(audit_id) REFERENCES metrics(audit_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_file_metrics_audit
+            ON file_metrics(audit_id, path);""",
+        ),
+        (7, "ALTER TABLE metrics ADD COLUMN runs_count INTEGER NOT NULL DEFAULT 1"),
+    ]
+
     def _init_db(self) -> None:
         with open_db(self.db_path) as conn:
             conn.execute(
@@ -247,122 +297,22 @@ class MetricsAuditor:
             row = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()
             version = row[0] if row and row[0] is not None else 0
 
-            # Legacy database without schema_version
+            # Legacy: ensure schema_version exists for migrations
             if version == 0:
-                # Create schema_version and mark as v0 so migrations add missing columns via ALTER TABLE
-                conn.executescript(
-                    """
-                    CREATE TABLE IF NOT EXISTS schema_version (
-                        version INTEGER PRIMARY KEY
-                    );
-                    """
-                )
                 conn.execute("INSERT OR IGNORE INTO schema_version(version) VALUES (0)")
-                version = 0
 
-            if version < 1:
-                conn.executescript(
-                    """
-                    CREATE TABLE IF NOT EXISTS metrics (
-                        audit_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        project TEXT NOT NULL,
-                        language TEXT,
-                        files INTEGER,
-                        loc INTEGER,
-                        code INTEGER,
-                        nloc INTEGER,
-                        ccn REAL,
-                        ccn_max INTEGER,
-                        warnings INTEGER,
-                        commits INTEGER,
-                        last_commit_date TEXT,
-                        author TEXT,
-                        branch TEXT,
-                        dirty INTEGER,
-                        commit_hash TEXT,
-                        tool_versions TEXT,
-                        duration_seconds REAL,
-                        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-                    );
-                    CREATE INDEX IF NOT EXISTS idx_metrics_project
-                        ON metrics(project);
-                    CREATE UNIQUE INDEX IF NOT EXISTS uq_metrics_run
-                        ON metrics(project, branch, commit_hash);
-                    """
-                )
-                conn.execute("INSERT OR IGNORE INTO schema_version(version) VALUES (1)")
-                version = 1
-
-            if version < 2:
-                columns = self._table_columns(conn, "metrics")
-                if "ccn_max" not in columns:
-                    conn.executescript(
-                        """
-                        ALTER TABLE metrics ADD COLUMN ccn_max INTEGER;
-                        """
-                    )
-                conn.execute("INSERT OR IGNORE INTO schema_version(version) VALUES (2)")
-
-            if version < 4:
-                columns = self._table_columns(conn, "metrics")
-                if "coverage" not in columns:
-                    conn.executescript(
-                        """
-                        ALTER TABLE metrics ADD COLUMN coverage REAL;
-                        ALTER TABLE metrics ADD COLUMN duplication REAL;
-                        ALTER TABLE metrics ADD COLUMN outdated_dependencies INTEGER;
-                        """
-                    )
-                conn.execute("INSERT OR IGNORE INTO schema_version(version) VALUES (4)")
-
-            if version < 5:
-                conn.executescript(
-                    """
-                    CREATE TABLE IF NOT EXISTS metrics_history (
-                        audit_id INTEGER PRIMARY KEY,
-                        project TEXT NOT NULL,
-                        language TEXT,
-                        timestamp DATETIME,
-                        loc INTEGER,
-                        ccn REAL,
-                        warnings INTEGER,
-                        FOREIGN KEY(audit_id) REFERENCES metrics(audit_id)
-                    );
-                    CREATE INDEX IF NOT EXISTS idx_history_project
-                        ON metrics_history(project, timestamp);
-                    """
-                )
-                conn.execute("INSERT OR IGNORE INTO schema_version(version) VALUES (5)")
-
-            if version < 6:
-                conn.executescript(
-                    """
-                    CREATE TABLE IF NOT EXISTS file_metrics (
-                        file_metric_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        audit_id INTEGER,
-                        project TEXT NOT NULL,
-                        path TEXT NOT NULL,
-                        nloc INTEGER,
-                        ccn REAL,
-                        warnings INTEGER,
-                        FOREIGN KEY(audit_id) REFERENCES metrics(audit_id)
-                    );
-                    CREATE INDEX IF NOT EXISTS idx_file_metrics_audit
-                        ON file_metrics(audit_id, path);
-                    """
-                )
-                conn.execute("INSERT OR IGNORE INTO schema_version(version) VALUES (6)")
-
-            if version < 7:
-                columns = self._table_columns(conn, "metrics")
-                if "runs_count" not in columns:
-                    conn.executescript(
-                        """
-                        ALTER TABLE metrics ADD COLUMN runs_count INTEGER NOT NULL DEFAULT 1;
-                        """
-                    )
-                conn.execute("INSERT OR IGNORE INTO schema_version(version) VALUES (7)")
-                version = 7
+            for ver, sql in self._MIGRATIONS:
+                if version < ver:
+                    if sql.startswith("ALTER"):
+                        match = re.search(r"ADD\s+COLUMN\s+(\w+)", sql)
+                        col_name = match.group(1) if match else ""
+                        columns = self._table_columns(conn, "metrics")
+                        if col_name and col_name not in columns:
+                            conn.executescript(sql)
+                    else:
+                        conn.executescript(sql)
+                    conn.execute("INSERT OR IGNORE INTO schema_version(version) VALUES (?)", (ver,))
+                    version = ver
 
     def _get_excludes(self, proj_path: Path) -> tuple[list[str], list[str]]:
         scc_excludes = list(self.config.get("filters", {}).get("global_dirs", []))
@@ -393,7 +343,7 @@ class MetricsAuditor:
 
         return scc_excludes, lizard_excludes
 
-    def _audit_project(self, target_rel_path: str) -> dict[str, Any] | None:
+    def _audit_project(self, target_rel_path: str) -> AuditResult | None:
         proj_path = (self.projects_dir / target_rel_path).resolve()
         if not proj_path.is_dir():
             return None
@@ -422,25 +372,30 @@ class MetricsAuditor:
         duration = (datetime.now(UTC) - start).total_seconds()
         tool_versions = _tool_versions()
 
-        return {
-            "project": proj_path.name,
-            "language": language,
-            "files": files,
-            "loc": loc,
-            "code": code,
-            "nloc": nloc,
-            "ccn": ccn,
-            "warnings": warnings,
-            "commits": git["commits"],
-            "last_commit_date": git["last_commit_date"],
-            "author": git["author"],
-            "branch": git["branch"],
-            "dirty": int(git["dirty"]),
-            "commit_hash": git["commit_hash"],
-            "tool_versions": json.dumps(tool_versions),
-            "duration_seconds": duration,
-            "file_metrics": file_metrics,
-        }
+        from typing import cast
+
+        return cast(
+            AuditResult,
+            {
+                "project": proj_path.name,
+                "language": language,
+                "files": files,
+                "loc": loc,
+                "code": code,
+                "nloc": nloc,
+                "ccn": ccn,
+                "warnings": warnings,
+                "commits": git["commits"],
+                "last_commit_date": git["last_commit_date"],
+                "author": git["author"],
+                "branch": git["branch"],
+                "dirty": int(git["dirty"]),
+                "commit_hash": git["commit_hash"],
+                "tool_versions": json.dumps(tool_versions),
+                "duration_seconds": duration,
+                "file_metrics": file_metrics,
+            },
+        )
 
     def _fs_sharp_fallback(self, proj_path: Path, warnings: int) -> int:
         dotnet_tools = str(Path.home() / ".dotnet/tools")
@@ -469,94 +424,89 @@ class MetricsAuditor:
 
         return warnings
 
-    def _save_results(self, results: list[dict[str, Any]]) -> None:
+    def _upsert_metrics_row(self, conn: sqlite3.Connection, result: AuditResult) -> int:
+        cursor = conn.execute(
+            """
+            INSERT INTO metrics
+            (project, language, files, loc, code, nloc, ccn, warnings,
+             commits, last_commit_date, author, branch, dirty, commit_hash,
+             tool_versions, duration_seconds, timestamp)
+            VALUES
+            (:project, :language, :files, :loc, :code, :nloc, :ccn, :warnings,
+             :commits, :last_commit_date, :author, :branch, :dirty, :commit_hash,
+             :tool_versions, :duration_seconds, CURRENT_TIMESTAMP)
+            ON CONFLICT(project, branch, commit_hash)
+            DO UPDATE SET
+                language = excluded.language, files = excluded.files,
+                loc = excluded.loc, code = excluded.code, nloc = excluded.nloc,
+                ccn = excluded.ccn, warnings = excluded.warnings,
+                commits = excluded.commits, last_commit_date = excluded.last_commit_date,
+                author = excluded.author, dirty = excluded.dirty,
+                tool_versions = excluded.tool_versions,
+                duration_seconds = excluded.duration_seconds,
+                timestamp = excluded.timestamp, runs_count = runs_count + 1
+            """,
+            result,
+        )
+        audit_id = cursor.lastrowid
+        if cursor.rowcount == 0 or not audit_id:
+            row = conn.execute(
+                "SELECT audit_id FROM metrics WHERE project = ? AND branch = ? AND commit_hash = ?",
+                (result["project"], result["branch"], result["commit_hash"]),
+            ).fetchone()
+            if not row:
+                return 0
+            audit_id = row["audit_id"].__index__()
+        return audit_id
+
+    def _log_metrics_history(self, conn: sqlite3.Connection, audit_id: int, result: AuditResult) -> None:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO metrics_history
+            (audit_id, project, language, loc, ccn, warnings)
+            VALUES (:audit_id, :project, :language, :loc, :ccn, :warnings)
+            """,
+            {
+                "audit_id": audit_id,
+                "project": result["project"],
+                "language": result.get("language"),
+                "loc": result.get("loc"),
+                "ccn": result.get("ccn"),
+                "warnings": result.get("warnings"),
+            },
+        )
+
+    def _save_file_metrics(self, conn: sqlite3.Connection, audit_id: int, result: AuditResult) -> None:
+        conn.execute("DELETE FROM file_metrics WHERE audit_id = ?", (audit_id,))
+        file_metrics = result.get("file_metrics") or []
+        for fm in file_metrics:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO file_metrics
+                (audit_id, project, path, nloc, ccn, warnings)
+                VALUES (:audit_id, :project, :path, :nloc, :ccn, :warnings)
+                """,
+                {
+                    "audit_id": audit_id,
+                    "project": result["project"],
+                    "path": fm["path"],
+                    "nloc": fm["nloc"],
+                    "ccn": fm["ccn"],
+                    "warnings": fm.get("warnings", 0),
+                },
+            )
+
+    def _save_results(self, results: list[AuditResult]) -> None:
         with open_db(self.db_path) as conn:
             for result in results:
-                # Upsert: update metrics on same (project, branch, commit_hash), increment runs_count
-                cursor = conn.execute(
-                    """
-                    INSERT INTO metrics
-                    (project, language, files, loc, code, nloc, ccn, warnings,
-                     commits, last_commit_date, author, branch, dirty, commit_hash,
-                     tool_versions, duration_seconds, timestamp)
-                    VALUES
-                    (:project, :language, :files, :loc, :code, :nloc, :ccn, :warnings,
-                     :commits, :last_commit_date, :author, :branch, :dirty, :commit_hash,
-                     :tool_versions, :duration_seconds, CURRENT_TIMESTAMP)
-                    ON CONFLICT(project, branch, commit_hash)
-                    DO UPDATE SET
-                        language = excluded.language,
-                        files = excluded.files,
-                        loc = excluded.loc,
-                        code = excluded.code,
-                        nloc = excluded.nloc,
-                        ccn = excluded.ccn,
-                        warnings = excluded.warnings,
-                        commits = excluded.commits,
-                        last_commit_date = excluded.last_commit_date,
-                        author = excluded.author,
-                        dirty = excluded.dirty,
-                        tool_versions = excluded.tool_versions,
-                        duration_seconds = excluded.duration_seconds,
-                        timestamp = excluded.timestamp,
-                        runs_count = runs_count + 1
-                    """,
-                    result,
-                )
-                audit_id = cursor.lastrowid
-                if cursor.rowcount == 0 or not audit_id:
-                    # Get the existing audit_id for the conflict row
-                    row = conn.execute(
-                        "SELECT audit_id FROM metrics WHERE project = ? AND branch = ? AND commit_hash = ?",
-                        (result["project"], result["branch"], result["commit_hash"]),
-                    ).fetchone()
-                    if not row:
-                        continue
-                    audit_id = row["audit_id"].__index__()
-
-                # Refresh file_metrics (delete old metric rows, re-insert below)
-                conn.execute(
-                    "DELETE FROM file_metrics WHERE audit_id = ?",
-                    (audit_id,),
-                )
-
-                conn.execute(
-                    """
-                    INSERT OR IGNORE INTO metrics_history
-                    (audit_id, project, language, loc, ccn, warnings)
-                    VALUES (:audit_id, :project, :language, :loc, :ccn, :warnings)
-                    """,
-                    {
-                        "audit_id": audit_id,
-                        "project": result["project"],
-                        "language": result.get("language"),
-                        "loc": result.get("loc"),
-                        "ccn": result.get("ccn"),
-                        "warnings": result.get("warnings"),
-                    },
-                )
-
-                file_metrics = result.get("file_metrics") or []
-                for file_metric in file_metrics:
-                    conn.execute(
-                        """
-                        INSERT OR IGNORE INTO file_metrics
-                        (audit_id, project, path, nloc, ccn, warnings)
-                        VALUES (:audit_id, :project, :path, :nloc, :ccn, :warnings)
-                        """,
-                        {
-                            "audit_id": audit_id,
-                            "project": result["project"],
-                            "path": file_metric["path"],
-                            "nloc": file_metric["nloc"],
-                            "ccn": file_metric["ccn"],
-                            "warnings": 0,
-                        },
-                    )
+                audit_id = self._upsert_metrics_row(conn, result)
+                if audit_id:
+                    self._log_metrics_history(conn, audit_id, result)
+                    self._save_file_metrics(conn, audit_id, result)
         export_outputs(self.output_dir, results)
 
     @staticmethod
-    def _effective_limits(result: dict[str, Any], config: dict[str, Any]) -> tuple[float, int]:
+    def _effective_limits(result: AuditResult, config: dict[str, Any]) -> tuple[float, int]:
         quality_gates = config.get("quality_gates", {})
         max_ccn = float(quality_gates.get("max_ccn", 10.0))
         max_warnings = int(quality_gates.get("max_warnings", 10))
@@ -574,8 +524,8 @@ class MetricsAuditor:
         return max_ccn, max_warnings
 
     def _evaluate_quality_gates(
-        self, results: list[dict[str, Any]], config: dict[str, Any]
-    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        self, results: list[AuditResult], config: dict[str, Any]
+    ) -> tuple[list[AuditResult], list[AuditResult]]:
         quality_gates = config.get("quality_gates", {})
         max_trend_increase = float(quality_gates.get("max_ccn_trend_increase", 0.2))
         trend_sensitive = set(quality_gates.get("trend_sensitive_projects", []))
@@ -607,12 +557,17 @@ class MetricsAuditor:
         }
 
     def _get_last_metrics(self, project: str) -> dict[str, Any] | None:
+        """Return the most recent historical audit BEFORE the current one, for trend comparison.
+
+        Uses metrics_history (append-only) rather than metrics (upserted) to avoid
+        seeing the current run when gates are evaluated before save (B3 fix).
+        """
         db_path = self.db_path
         with open_db(db_path) as conn:
             row = conn.execute(
                 """
                 SELECT timestamp, loc, ccn, warnings
-                FROM metrics
+                FROM metrics_history
                 WHERE project = ?
                 ORDER BY timestamp DESC
                 LIMIT 1
@@ -669,7 +624,7 @@ class MetricsAuditor:
     def run(self, verbose: bool = False, quiet: bool = False, incremental: bool = False) -> dict[str, Any]:
         logger = _setup_logging(verbose=verbose, quiet=quiet)
         targets = self.config.get("discovery", {}).get("projects", [])
-        results: list[dict[str, Any]] = []
+        results: list[AuditResult] = []
         failures: list[dict[str, Any]] = []
 
         if incremental:

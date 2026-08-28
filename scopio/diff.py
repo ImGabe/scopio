@@ -7,13 +7,14 @@ from typing import Any
 import click
 
 from .db import open_db
+from .types import DiffSummary
 
 
 def _safe_num(value: Any, default: float = 0) -> float:
     return value if value is not None else default
 
 
-def project_diff(db_path: Path, project: str) -> dict[str, Any]:
+def project_diff(db_path: Path, project: str) -> DiffSummary:
     with open_db(db_path) as conn:
         rows = conn.execute(
             """

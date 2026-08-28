@@ -194,6 +194,8 @@ def test_trend_gate_detects_regression(tmp_path: Path) -> None:
     # We use the fact that _init_db creates the schema, then manually insert
     # an older row BEFORE running the real audit
     auditor._init_db()
+    # Insert a fake previous audit into metrics (for the upsert to work)
+    # and into metrics_history (for the trend gate to query)
     with open_db(auditor.db_path) as conn:
         conn.execute(
             """
@@ -222,6 +224,17 @@ def test_trend_gate_detects_regression(tmp_path: Path) -> None:
                 0.1,
             ),
         )
+        # Also insert into metrics_history for trend gate query
+        audit_row = conn.execute("SELECT audit_id FROM metrics WHERE project = ?", ("dummy-reg",)).fetchone()
+        if audit_row:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO metrics_history
+                (audit_id, project, language, loc, ccn, warnings)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (audit_row["audit_id"], "dummy-reg", "Python", 10, 1.0, 0),
+            )
 
     summary = auditor.run()
     # If trend gate works, this project should appear in trend_failures

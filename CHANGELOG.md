@@ -8,7 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
-- **Fixed bug in `_parse_lizard_output`**: CCN now reads from column 1 (CCN value) instead of column 2 (token count) and the summary/Total lines are filtered out so they don't inflate file counts and averages. This fixes quality gates reporting incorrectly.\n- `mypy` check added to CI workflow (`tests.yml`).\n- `pytest-cov` added to dev dependency group.\n- `scopio archive` now respects `--output-dir` from the parent context (was always writing to CWD).\n- `observability` dict no longer duplicated between `audit.py` and `cli.py`.\n- WAL journal mode enabled for SQLite (reduces lock contention under parallel audits).\n- `.pre-commit-config.yaml` added with ruff, ruff-format, mypy and uv-lock hooks.\n- `scopio.toml` added to `.gitignore`.\n- Git repository initialized.\n\n
+- **Fixed bug in `_parse_lizard_output`**: CCN now reads from column 1 (CCN value) instead of column 2 (token count) and the summary/Total lines are filtered out so they don't inflate file counts and averages. This fixes quality gates reporting incorrectly.
+- `mypy` check added to CI workflow (`tests.yml`).
+- `pytest-cov` added to dev dependency group.
+- `scopio archive` now respects `--output-dir` from the parent context.
+- `observability` dict no longer duplicated between `audit.py` and `cli.py`.
+- WAL journal mode enabled for SQLite.
+- `.pre-commit-config.yaml` added with ruff, ruff-format, mypy and uv-lock hooks.
+- `scopio.toml` added to `.gitignore`.
+- Git repository initialized.
+
+
 - Migrated toolchain from setuptools/pip to **uv** (uv lock, uv sync, uv build).
 - Build backend changed to **hatchling** for faster builds.
 - `lizard` is now a declared project dependency (via PyPI) instead of a manual install.
@@ -32,6 +42,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Removed always-dead fields (`ccn_max: 0`, `coverage: None`, `duplication: None`, `outdated_dependencies: None`) from audit result dict and INSERT statement.
 - Dead columns (`ccn_max`, `coverage`, `duplication`, `outdated_dependencies`) left in schema for backward compatibility but no longer populated.
 - Unused `dirs` loop variable in `_filter_incremental` renamed; missing `Any`/`render_file_markdown` imports fixed.
+
+
+### Changed
+- **TypedDicts adopted throughout**: `scopio/types.py` imported and used in all modules — `audit.py`, `diff.py`, `cli.py`, `formats.py` now use typed `AuditResult`, `LizardSummary`, `SccRecord`, `GitInfo`, `DiffSummary` signatures instead of bare `dict[str, Any]`.
+- **`export_outputs` decomposed** into `_enrich_results`, `_export_json`, `_export_csv`, `_export_markdown` helpers (reduced CCN from 14 to 3, eliminated duplicate `tools_str` logic).
+- **`_init_db` made declarative**: If-chain replaced with `_MIGRATIONS` list of `(version, sql)` tuples and a clean loop (reduced from 119 to ~40 NLOC).
+- **`_save_results` decomposed** into `_upsert_metrics_row`, `_log_metrics_history`, `_save_file_metrics` helpers (reduced from 79 to ~15 NLOC).
+- **Trend gate now queries `metrics_history`** (append-only) instead of `metrics` (upsert) — B3 fix is more robust and survives future refactors.
+- **Coverage gate in CI**: `pytest --cov=scopio --cov-fail-under=60` added to `tests.yml`.
+- **README**: Added section documenting `runs_count` and upsert semantics.
+- **Bug fix**: `_save_results` had hardcoded `"warnings": 0` for file metrics — now uses `file_metric.get("warnings", 0)`.
+- **Bug fix**: Migration loop in `_init_db` had `version = 7` outside the `if` block, preventing all migrations after v1 from running.
 
 ### Added
 - CLI tests with `click.testing.CliRunner` covering all 8 commands (`tests/test_cli.py`, 7 tests).

@@ -30,6 +30,19 @@ uv run scopio --help
 
 ## Quick Start
 
+## Semantic Versioning
+
+This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+---
+
+### Audit behavior
+
+- Each audit run creates/updates a single row per `(project, branch, commit_hash)`.
+- **Same commit, same branch**: metrics are **upserted** (updated) and `runs_count` is incremented. This avoids data staleness when re-running on the same commit (e.g. after changing `.scopio.toml` filters).
+- **Different commit**: a new row is created with `runs_count = 1`.
+- The `runs_count` field is exposed in `report`, CSV, JSON and Markdown exports.
+- Quality gates and diff comparisons use the last audited run for each project. Trend gate compares against the **previous** historical audit (before the current one).
 ```bash
 scopio --config scopio.toml run
 ```

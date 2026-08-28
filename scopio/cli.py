@@ -10,6 +10,7 @@ import click
 from .audit import MetricsAuditor
 from .db import open_db
 from .diff import project_diff, project_file_diff, render_ci_summary, render_file_markdown, render_markdown
+from .types import AuditResult
 
 
 @click.group()
@@ -98,7 +99,7 @@ def report(ctx: click.Context, project: str, limit: int) -> None:
 @click.pass_context
 def diff(ctx: click.Context, project: str, base: str | None) -> None:
     db_path = ctx.obj["output_dir"] / "scopio.db"
-    summary = project_diff(db_path, project)
+    summary: dict[str, Any] = project_diff(db_path, project)  # type: ignore[assignment]
 
     if base and summary["base"]["timestamp"] != base:
         with open_db(db_path) as conn:
@@ -134,7 +135,7 @@ def diff_report(
     threshold_ccn: float | None,
 ) -> None:
     db_path = ctx.obj["output_dir"] / "scopio.db"
-    summary = project_diff(db_path, project)
+    summary: dict[str, Any] = project_diff(db_path, project)  # type: ignore[assignment]
 
     if files:
         summary = project_file_diff(db_path, project, threshold_ccn=threshold_ccn)
@@ -213,11 +214,11 @@ def clean(ctx: click.Context, keep: int) -> None:
 @click.pass_context
 def ci_cmd(ctx: click.Context, project: str, fail_on_regression: bool) -> None:
     db_path = ctx.obj["output_dir"] / "scopio.db"
-    summary = project_diff(db_path, project)
+    summary: dict[str, Any] = project_diff(db_path, project)  # type: ignore[assignment]
     output = render_ci_summary(summary)
     click.echo(output)
 
-    if fail_on_regression and summary["delta"].get("ccn_trend") is not None and summary["delta"]["ccn_trend"] > 0:
+    if fail_on_regression and (summary["delta"].get("ccn_trend") or 0) > 0:
         raise click.ClickException("Regression detected: CCN increased.")
 
 
@@ -267,12 +268,12 @@ def archive(path: str | None, older_than: str | None, output_format: str) -> Non
         out.write_text(json.dumps([dict(r) for r in rows], indent=2, default=str))
     else:
         out = out_dir / "scopio_archive.parquet"
-        _write_parquet(out, [dict(r) for r in rows])
+        _write_parquet(out, [dict(r) for r in rows])  # type: ignore[misc]
 
     click.echo(f"Archived: {len(rows)} rows to {out}")
 
 
-def _write_parquet(path: Path, rows: list[dict[str, Any]]) -> None:
+def _write_parquet(path: Path, rows: list[AuditResult]) -> None:
     try:
         import pandas as pd
     except ImportError as exc:
