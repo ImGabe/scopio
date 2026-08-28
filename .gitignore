@@ -12,3 +12,6 @@ scopio.md
 scopio_archive.*
 scopio.toml
 *.DS_Store
+.coverage
+.coverage.*
+coverage/
