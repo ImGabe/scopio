@@ -23,7 +23,11 @@ pip install scopio
 
 - Python >= 3.11
 - `lizard` >= 1.24.0 (required for CSV parsing mode)
-- `scc` >= 3.3.0 (optional, used for language/line counting)
+- `scc` >= 3.3.0 (optional, used for language/line counting) — the [boyter/scc](https://github.com/boyter/scc) code counter, **not** the unrelated PyPI `scc` package:
+  ```bash
+  # Download a binary from https://github.com/boyter/scc/releases, or:
+  go install github.com/boyter/scc/v3@latest
+  ```
 - `git` (optional, used for metadata)
 
 ## Quick Start
