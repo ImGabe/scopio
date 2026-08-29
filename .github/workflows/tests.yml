@@ -35,6 +35,12 @@ jobs:
       - name: Run type checks
         run: uv run mypy scopio/
 
+      - name: Lint
+        run: uv run ruff check scopio/ tests/
+
+      - name: Check formatting
+        run: uv run ruff format --check scopio/ tests/
+
       - name: Build distributions
         run: uv build
 
