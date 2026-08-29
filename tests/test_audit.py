@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+from click.testing import CliRunner
 
 from scopio.audit import (
     MetricsAuditor,
@@ -504,3 +505,81 @@ def test_upsert_different_commit_creates_separate_row(tmp_path: Path, monkeypatc
         # Still 1 row (upserted) with runs_count incremented
         assert len(rows) == 1, f"After second run (same commit): expected 1 row, got {len(rows)}"
         assert rows[0]["runs_count"] == 2, f"runs_count should be 2, got {rows[0]['runs_count']}"
+
+
+# ─── Path traversal guard ─────────────────────────────────────────────────
+
+
+def test_audit_project_path_traversal(tmp_path: Path) -> None:
+    """_audit_project must reject paths outside projects_dir (e.g. ../../etc)."""
+    config = tmp_path / "scopio.toml"
+    config.write_text(
+        '[discovery]\nprojects = ["../../etc/passwd"]\n[quality_gates]\nmax_ccn = 10.0\nmax_warnings = 10\n'
+    )
+    auditor = MetricsAuditor(config, tmp_path / "projects", tmp_path)
+    result = auditor._audit_project("../../etc/passwd")
+    assert result is None, "Path traversal should return None"
+
+
+# ─── e2e clean command ────────────────────────────────────────────────────
+
+
+def test_clean_keeps_correct_rows(tmp_path: Path) -> None:
+    """Clean should keep only the last N rows and cascade to child tables."""
+    from scopio.cli import cli
+    from scopio.db import open_db
+
+    # Create a scopio.toml and run init to get .scopio/ created
+    (tmp_path / "scopio.toml").write_text("[discovery]\nprojects = []\n")
+
+    runner = CliRunner()
+    db_path = tmp_path / "scopio.db"
+    with open_db(db_path) as conn:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS metrics ("
+            "audit_id INTEGER PRIMARY KEY AUTOINCREMENT, project TEXT, branch TEXT, commit_hash TEXT, "
+            "timestamp DATETIME DEFAULT CURRENT_TIMESTAMP"
+            ")"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS metrics_history ("
+            "audit_id INTEGER, project TEXT, loc INTEGER, ccn REAL, warnings INTEGER, "
+            "FOREIGN KEY(audit_id) REFERENCES metrics(audit_id)"
+            ")"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS file_metrics ("
+            "file_metric_id INTEGER PRIMARY KEY AUTOINCREMENT, audit_id INTEGER, project TEXT, "
+            "path TEXT, nloc INTEGER, ccn REAL, warnings INTEGER, "
+            "FOREIGN KEY(audit_id) REFERENCES metrics(audit_id)"
+            ")"
+        )
+        # Insert 5 rows
+        for i in range(1, 6):
+            cursor = conn.execute(
+                "INSERT INTO metrics (project, branch, commit_hash) VALUES (?, ?, ?)",
+                ("proj", "main", f"abc00{i}"),
+            )
+            aid = cursor.lastrowid
+            conn.execute(
+                "INSERT INTO metrics_history (audit_id, project, loc, ccn, warnings) VALUES (?, ?, ?, ?, ?)",
+                (aid, "proj", 10, 1.0, 0),
+            )
+            conn.execute(
+                "INSERT INTO file_metrics (audit_id, project, path, nloc, ccn, warnings) VALUES (?, ?, ?, ?, ?, ?)",
+                (aid, "proj", "main.py", 10, 1.0, 0),
+            )
+
+    # Run clean with keep=2
+    result = runner.invoke(
+        cli, ["--config", str(tmp_path / "scopio.toml"), "--output-dir", str(tmp_path), "clean", "--keep", "2"]
+    )
+    assert result.exit_code == 0, f"clean failed: {result.output}"
+
+    with open_db(db_path) as conn:
+        metrics = conn.execute("SELECT COUNT(*) FROM metrics").fetchone()[0]
+        assert metrics == 2, f"Expected 2 metrics rows, got {metrics}"
+        history = conn.execute("SELECT COUNT(*) FROM metrics_history").fetchone()[0]
+        assert history == 2, f"Expected 2 history rows, got {history}"
+        file_metrics = conn.execute("SELECT COUNT(*) FROM file_metrics").fetchone()[0]
+        assert file_metrics == 2, f"Expected 2 file_metrics rows, got {file_metrics}"

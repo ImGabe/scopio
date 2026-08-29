@@ -3,7 +3,6 @@ from __future__ import annotations
 import csv
 import json
 from pathlib import Path
-from typing import Any
 
 import click
 
@@ -100,7 +99,7 @@ def report(ctx: click.Context, project: str, limit: int) -> None:
 @click.pass_context
 def diff(ctx: click.Context, project: str, base: str | None) -> None:
     db_path = ctx.obj["output_dir"] / "scopio.db"
-    summary: dict[str, Any] = project_diff(db_path, project)  # type: ignore[assignment]
+    summary = project_diff(db_path, project)
 
     if base and summary["base"]["timestamp"] != base:
         with open_db(db_path) as conn:
@@ -110,7 +109,7 @@ def diff(ctx: click.Context, project: str, base: str | None) -> None:
             ).fetchone()
         if not row:
             raise click.ClickException(f"Base '{base}' not found for project '{project}'.")
-        summary["base"] = dict(row)
+        summary["base"] = dict(row)  # type: ignore[typeddict-item]
 
     click.echo(f"Project: {project}")
     click.echo(f"Base : {summary['base']['timestamp']} ({summary['base']['branch']})")
@@ -136,18 +135,18 @@ def diff_report(
     threshold_ccn: float | None,
 ) -> None:
     db_path = ctx.obj["output_dir"] / "scopio.db"
-    summary: dict[str, Any] = project_diff(db_path, project)  # type: ignore[assignment]
+    summary = project_diff(db_path, project)
 
     if files:
-        summary = project_file_diff(db_path, project, threshold_ccn=threshold_ccn)
+        summary = project_file_diff(db_path, project, threshold_ccn=threshold_ccn)  # type: ignore[assignment]
 
     if output_format == "json":
         click.echo(json.dumps(summary, indent=2))
     elif output_format == "md":
         if files:
-            click.echo(render_file_markdown(summary))
+            click.echo(render_file_markdown(summary))  # type: ignore[arg-type]
         else:
-            click.echo(render_markdown(summary))
+            click.echo(render_markdown(summary))  # type: ignore[arg-type]
     else:
         if files:
             file_summary = project_file_diff(db_path, project, threshold_ccn=threshold_ccn)
@@ -184,7 +183,8 @@ def clean(ctx: click.Context, keep: int) -> None:
             WHERE audit_id NOT IN (
                 SELECT audit_id FROM metrics ORDER BY timestamp DESC LIMIT ?
             )
-            """
+            """,
+            (keep,),
         )
         conn.execute(
             """
@@ -192,7 +192,8 @@ def clean(ctx: click.Context, keep: int) -> None:
             WHERE audit_id NOT IN (
                 SELECT audit_id FROM metrics ORDER BY timestamp DESC LIMIT ?
             )
-            """
+            """,
+            (keep,),
         )
         # Then remove the metrics rows themselves
         conn.execute(
@@ -204,7 +205,7 @@ def clean(ctx: click.Context, keep: int) -> None:
                 LIMIT ?
             )
             """,
-            (keep, keep, keep),
+            (keep,),
         )
     click.echo(f"Cleanup done. Keeping last {keep} audits.")
 
@@ -215,12 +216,27 @@ def clean(ctx: click.Context, keep: int) -> None:
 @click.pass_context
 def ci_cmd(ctx: click.Context, project: str, fail_on_regression: bool) -> None:
     db_path = ctx.obj["output_dir"] / "scopio.db"
-    summary: dict[str, Any] = project_diff(db_path, project)  # type: ignore[assignment]
-    output = render_ci_summary(summary)
+    summary = project_diff(db_path, project)
+    output = render_ci_summary(summary)  # type: ignore[arg-type]
     click.echo(output)
 
-    if fail_on_regression and (summary["delta"].get("ccn_trend") or 0) > 0:
-        raise click.ClickException("Regression detected: CCN increased.")
+    if fail_on_regression:
+        # Read trend threshold from config (default 0.2)
+        config_path = ctx.obj["config_path"]
+        trend_threshold = 0.2
+        if config_path.exists():
+            from .audit import _load_config
+
+            try:
+                cfg = _load_config(config_path)
+                trend_threshold = cfg.get("quality_gates", {}).get("max_ccn_trend_increase", 0.2)
+            except Exception:
+                pass
+        ccn_trend = summary["delta"].get("ccn_trend") or 0
+        if ccn_trend > trend_threshold:
+            raise click.ClickException(
+                f"Regression detected: CCN increased {ccn_trend:.1%} (threshold: {trend_threshold:.0%})."
+            )
 
 
 @cli.command()
@@ -304,6 +320,14 @@ ignored_langs = [
 [quality_gates]
 max_ccn = 10.0
 max_warnings = 10
+max_ccn_trend_increase = 0.2
+trend_sensitive_projects = []
+
+[quality_gates.per_project]
+# \"my-project\" = { max_ccn = 12.0, max_warnings = 15 }
+
+[quality_gates.per_language]
+# Python = { max_ccn = 12.0, max_warnings = 20 }
 """
     config.write_text(sample)
     click.echo(f"Created: {config}")

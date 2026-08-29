@@ -56,5 +56,5 @@ testpaths = ["tests"]
 python_version = "3.11"
 strict = true
 ignore_missing_imports = true
-disallow_untyped_defs = false
+disallow_untyped_defs = true
 exclude = ["tests/"]

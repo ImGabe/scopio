@@ -51,8 +51,11 @@ def _setup_logging(verbose: bool = False, quiet: bool = False) -> logging.Logger
 
 
 def _load_config(path: Path) -> dict[str, Any]:
-    with open(path, "rb") as f:
-        return tomllib.load(f)
+    try:
+        with open(path, "rb") as f:
+            return tomllib.load(f)
+    except (tomllib.TOMLDecodeError, FileNotFoundError) as exc:
+        raise ConfigError(f"Invalid config file: {path} — {exc}") from exc
 
 
 def _ensure_deps() -> None:
@@ -66,7 +69,9 @@ def _run_cmd(path: Path, cmd: list[str]) -> str:
         res = subprocess.run(cmd, cwd=path, capture_output=True, text=True, timeout=30)
         return res.stdout.strip()
     except Exception as exc:  # pragma: no cover
-        return f"ERROR:{exc}"
+        _log = logging.getLogger("scopio")
+        _log.warning(json.dumps({"event": "run_cmd_error", "cmd": " ".join(cmd), "error": str(exc)}))
+        return ""
 
 
 def _git_info(path: Path) -> GitInfo:
@@ -346,6 +351,14 @@ class MetricsAuditor:
     def _audit_project(self, target_rel_path: str) -> AuditResult | None:
         proj_path = (self.projects_dir / target_rel_path).resolve()
         if not proj_path.is_dir():
+            return None
+        # Guard against path traversal outside projects_dir
+        try:
+            proj_path.relative_to(self.projects_dir.resolve())
+        except ValueError:
+            logging.getLogger("scopio").error(
+                json.dumps({"event": "path_traversal", "project": target_rel_path, "resolved": str(proj_path)})
+            )
             return None
 
         git = _git_info(proj_path)
