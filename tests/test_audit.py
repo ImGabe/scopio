@@ -611,12 +611,13 @@ def test_validate_tool_versions_unparseable() -> None:
 
 # ─── _filter_incremental tests ───────────────────────────────────────
 
+
 def test_filter_incremental_no_recent_files(tmp_path: Path) -> None:
     """Project with no recent files should NOT be selected."""
     from datetime import datetime
 
     config = tmp_path / "scopio.toml"
-    config.write_text("[discovery]\nprojects = [\"old-proj\"]\n[quality_gates]\nmax_ccn = 10.0\nmax_warnings = 10\n")
+    config.write_text('[discovery]\nprojects = ["old-proj"]\n[quality_gates]\nmax_ccn = 10.0\nmax_warnings = 10\n')
 
     proj = tmp_path / "projects" / "old-proj"
     proj.mkdir(parents=True)
@@ -634,7 +635,9 @@ def test_filter_incremental_no_recent_files(tmp_path: Path) -> None:
     original = auditor._get_last_metrics
     auditor._get_last_metrics = lambda proj: {  # type: ignore[method-assign]
         "timestamp": "2026-12-31 23:59:59+00:00",
-        "loc": 1, "ccn": 1.0, "warnings": 0,
+        "loc": 1,
+        "ccn": 1.0,
+        "warnings": 0,
     }
 
     result = auditor._filter_incremental(["old-proj"])
@@ -645,7 +648,7 @@ def test_filter_incremental_no_recent_files(tmp_path: Path) -> None:
 def test_filter_incremental_recent_file(tmp_path: Path) -> None:
     """Project with a recent file should be selected."""
     config = tmp_path / "scopio.toml"
-    config.write_text("[discovery]\nprojects = [\"recent-proj\"]\n[quality_gates]\nmax_ccn = 10.0\nmax_warnings = 10\n")
+    config.write_text('[discovery]\nprojects = ["recent-proj"]\n[quality_gates]\nmax_ccn = 10.0\nmax_warnings = 10\n')
 
     proj = tmp_path / "projects" / "recent-proj"
     proj.mkdir(parents=True)
@@ -657,7 +660,9 @@ def test_filter_incremental_recent_file(tmp_path: Path) -> None:
     # Last run was in the past
     auditor._get_last_metrics = lambda proj: {  # type: ignore[method-assign]
         "timestamp": "2020-01-01 00:00:00+00:00",
-        "loc": 1, "ccn": 1.0, "warnings": 0,
+        "loc": 1,
+        "ccn": 1.0,
+        "warnings": 0,
     }
 
     result = auditor._filter_incremental(["recent-proj"])
@@ -668,7 +673,7 @@ def test_filter_incremental_recent_file(tmp_path: Path) -> None:
 def test_filter_incremental_subdir_recent(tmp_path: Path) -> None:
     """File in subdirectory should also trigger selection."""
     config = tmp_path / "scopio.toml"
-    config.write_text("[discovery]\nprojects = [\"sub-proj\"]\n[quality_gates]\nmax_ccn = 10.0\nmax_warnings = 10\n")
+    config.write_text('[discovery]\nprojects = ["sub-proj"]\n[quality_gates]\nmax_ccn = 10.0\nmax_warnings = 10\n')
 
     proj = tmp_path / "projects" / "sub-proj"
     proj.mkdir(parents=True)
@@ -680,7 +685,9 @@ def test_filter_incremental_subdir_recent(tmp_path: Path) -> None:
 
     auditor._get_last_metrics = lambda proj: {  # type: ignore[method-assign]
         "timestamp": "2020-01-01 00:00:00+00:00",
-        "loc": 1, "ccn": 1.0, "warnings": 0,
+        "loc": 1,
+        "ccn": 1.0,
+        "warnings": 0,
     }
 
     result = auditor._filter_incremental(["sub-proj"])
@@ -690,7 +697,7 @@ def test_filter_incremental_subdir_recent(tmp_path: Path) -> None:
 def test_filter_incremental_no_previous_audit(tmp_path: Path) -> None:
     """Project with no previous audit should always be selected."""
     config = tmp_path / "scopio.toml"
-    config.write_text("[discovery]\nprojects = [\"new-proj\"]\n[quality_gates]\nmax_ccn = 10.0\nmax_warnings = 10\n")
+    config.write_text('[discovery]\nprojects = ["new-proj"]\n[quality_gates]\nmax_ccn = 10.0\nmax_warnings = 10\n')
 
     proj = tmp_path / "projects" / "new-proj"
     proj.mkdir(parents=True)

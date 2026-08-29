@@ -74,8 +74,9 @@ def test_cli_diff_missing_project_option(tmp_path: Path) -> None:
 def test_cli_clean_no_db(tmp_path: Path) -> None:
     """clean with no database should just print a message."""
     runner = CliRunner()
-    result = runner.invoke(cli, ["--config", str(tmp_path / "scopio.toml"),
-                                 "--output-dir", str(tmp_path), "clean", "--keep", "5"])
+    result = runner.invoke(
+        cli, ["--config", str(tmp_path / "scopio.toml"), "--output-dir", str(tmp_path), "clean", "--keep", "5"]
+    )
     assert result.exit_code == 0, f"clean failed: {result.output}"
     assert "Nothing to clean" in result.output
 
@@ -100,16 +101,13 @@ def test_cli_archive_json_format(tmp_path: Path) -> None:
             "timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)"
         )
         conn.execute(
-            "INSERT INTO metrics (project, loc, ccn, warnings, branch, commit_hash) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO metrics (project, loc, ccn, warnings, branch, commit_hash) VALUES (?, ?, ?, ?, ?, ?)",
             ("test-proj", 100, 3.0, 0, "main", "abc123"),
         )
 
-    result = runner.invoke(cli, [
-        "--config", str(tmp_path / "scopio.toml"),
-        "--output-dir", str(tmp_path),
-        "archive", "--format", "json"
-    ])
+    result = runner.invoke(
+        cli, ["--config", str(tmp_path / "scopio.toml"), "--output-dir", str(tmp_path), "archive", "--format", "json"]
+    )
     assert result.exit_code == 0
     assert "Archived" in result.output
 
@@ -134,16 +132,14 @@ def test_cli_archive_parquet_fallback(tmp_path: Path) -> None:
             "timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)"
         )
         conn.execute(
-            "INSERT INTO metrics (project, loc, ccn, warnings, branch, commit_hash) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO metrics (project, loc, ccn, warnings, branch, commit_hash) VALUES (?, ?, ?, ?, ?, ?)",
             ("test-proj", 100, 3.0, 0, "main", "abc123"),
         )
 
-    result = runner.invoke(cli, [
-        "--config", str(tmp_path / "scopio.toml"),
-        "--output-dir", str(tmp_path),
-        "archive", "--format", "parquet"
-    ])
+    result = runner.invoke(
+        cli,
+        ["--config", str(tmp_path / "scopio.toml"), "--output-dir", str(tmp_path), "archive", "--format", "parquet"],
+    )
     # Should fail gracefully with ClickException (pandas not available)
     assert result.exit_code != 0
     assert "pandas" in result.output.lower() or "Parquet" in result.output
