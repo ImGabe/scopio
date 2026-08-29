@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Testes parametrizados para CI_RULES (14 testes estruturais + 10 parametrizados).
 - Documentação de requisito de lizard >= 1.24.0 no README.
-- Relatório do spike de dependências nativas (SPIKE_REPORT.md) — conclusão: não viável.
+- Relatório do spike de dependências nativas (docs/SPIKE_REPORT.md) — conclusão: não viável.
 - Testes de renderização para markdown, CI summary e file-level markdown.
 - Testes de cobertura para archive (json, parquet), clean (sem db), e filtro incremental.
 
