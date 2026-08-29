@@ -1,3 +1,10 @@
+## [0.2.2] - 2026-08-29
+
+### Changed
+- README reestruturado: seções reordenadas, nova seção de Features, badges de Python/License, exemplos consistentes e remoção de conteúdo duplicado.
+- Workflow de publish separado em jobs de `build` e `publish-to-pypi` (com `upload-artifact`/`download-artifact`), alinhado ao guia de Trusted Publishing da PyPA.
+- Validação de distribuições (`uv build` + `twine check`) adicionada aos workflows de testes e publish.
+
 ## [0.2.1] - 2026-08-29
 
 ### Added
