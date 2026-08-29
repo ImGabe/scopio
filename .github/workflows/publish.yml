@@ -6,6 +6,12 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to publish"
+        required: true
+        default: "v0.2.1"
 
 jobs:
   publish:
@@ -34,9 +40,3 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           skip-existing: true
-  workflow_dispatch:
-    inputs:
-      ref:
-        description: 'Git ref to publish'
-        required: true
-        default: 'v0.2.1'
