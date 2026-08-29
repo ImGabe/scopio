@@ -3,6 +3,15 @@
 Code metrics auditor with SQLite history, diffs and quality gates.
 
 [![PyPI version](https://badge.fury.io/py/scopio.svg)](https://pypi.org/project/scopio/)
+[![Python versions](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+## Features
+
+- Audits code metrics (lines, complexity, warnings, languages) across multiple projects.
+- Stores audit history in SQLite with diffs and quality gates.
+- Exports results as JSON, CSV and Markdown.
+- Compares audits and detects regressions for CI (`--fail-on-regression`).
 
 ## Install
 
@@ -17,24 +26,6 @@ pip install scopio
 - `scc` >= 3.3.0 (optional, used for language/line counting)
 - `git` (optional, used for metadata)
 
-## Development
-
-This project uses [uv](https://docs.astral.sh/uv/) as the Python toolchain.
-
-```bash
-# Sync dependencies and create a virtual environment
-uv sync
-
-# Run tests
-uv run pytest
-
-# Run a lint check
-uv run ruff check
-
-# Run scopio locally
-uv run scopio --help
-```
-
 ## Quick Start
 
 ```bash
@@ -43,25 +34,7 @@ scopio --config scopio.toml run
 
 All output artifacts (database, JSON, CSV, Markdown) are stored in the `.scopio/` directory by default. Use `--output-dir` to override.
 
-All output artifacts (database, JSON, CSV, Markdown) are stored in the `.scopio/` directory by default. Use `--output-dir` to override.
-
 If `scc` or `lizard` versions differ from the expected range, a non-blocking `tool_version_diverge` warning is emitted in the logs.
-## Semantic Versioning
-
-This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-
----
-
-### Audit behavior
-
-- Each audit run creates/updates a single row per `(project, branch, commit_hash)`.
-- **Same commit, same branch**: metrics are **upserted** (updated) and `runs_count` is incremented. This avoids data staleness when re-running on the same commit (e.g. after changing `.scopio.toml` filters).
-- **Different commit**: a new row is created with `runs_count = 1`.
-- The `runs_count` field is exposed in `report`, CSV, JSON and Markdown exports.
-- Quality gates and diff comparisons use the last audited run for each project. Trend gate compares against the **previous** historical audit (before the current one).
-```bash
-scopio --config scopio.toml run
-```
 
 ## Usage
 
@@ -76,25 +49,25 @@ scopio --config scopio.toml run --incremental
 ### Report history
 
 ```bash
-scopio report --project wrong-web --limit 10
+scopio report --project my-project --limit 10
 ```
 
 ### Diff between audits
 
 ```bash
-scopio diff --project wrong-web
+scopio diff --project my-project
 ```
 
 ### Diff report with file-level detail
 
 ```bash
-scopio diff-report --project wrong-web --files --threshold-ccn 6
+scopio diff-report --project my-project --files --threshold-ccn 6
 ```
 
 ### CI integration
 
 ```bash
-scopio ci --project wrong-web --fail-on-regression
+scopio ci --project my-project --fail-on-regression
 ```
 
 ### Clean old audits
@@ -140,6 +113,14 @@ trend_sensitive_projects = []
 # Python = { max_ccn = 12.0, max_warnings = 20 }
 ```
 
+## Audit behavior
+
+- Each audit run creates/updates a single row per `(project, branch, commit_hash)`.
+- **Same commit, same branch**: metrics are **upserted** (updated) and `runs_count` is incremented. This avoids data staleness when re-running on the same commit (e.g. after changing `.scopio.toml` filters).
+- **Different commit**: a new row is created with `runs_count = 1`.
+- The `runs_count` field is exposed in `report`, CSV, JSON and Markdown exports.
+- Quality gates and diff comparisons use the last audited run for each project. Trend gate compares against the **previous** historical audit (before the current one).
+
 ## GitHub Actions
 
 ```yaml
@@ -168,6 +149,28 @@ jobs:
         run: scopio ci --project my-project --fail-on-regression
 ```
 
+## Development
+
+This project uses [uv](https://docs.astral.sh/uv/) as the Python toolchain.
+
+```bash
+# Sync dependencies and create a virtual environment
+uv sync
+
+# Run tests
+uv run pytest
+
+# Run a lint check
+uv run ruff check
+
+# Run scopio locally
+uv run scopio --help
+```
+
+## Semantic Versioning
+
+This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
 ## License
 
-MIT
+[MIT](LICENSE)
