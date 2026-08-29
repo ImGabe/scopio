@@ -30,6 +30,12 @@ uv run scopio --help
 
 ## Quick Start
 
+```bash
+scopio --config scopio.toml run
+```
+
+All output artifacts (database, JSON, CSV, Markdown) are stored in the `.scopio/` directory by default. Use `--output-dir` to override.
+
 ## Semantic Versioning
 
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).

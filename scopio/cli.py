@@ -23,7 +23,8 @@ def cli(ctx: click.Context, config: str | None, projects_dir: str | None, output
     root = Path.cwd()
     config_path = Path(config) if config else root / "scopio.toml"
     projects_root = Path(projects_dir) if projects_dir else root
-    out = Path(output_dir) if output_dir else root
+    out = Path(output_dir) if output_dir else root / ".scopio"
+    out.mkdir(parents=True, exist_ok=True)
     ctx.obj = {
         "config_path": config_path,
         "projects_dir": projects_root,
@@ -227,7 +228,7 @@ def ci_cmd(ctx: click.Context, project: str, fail_on_regression: bool) -> None:
 @click.option("--older-than", default=None, help="Only rows with timestamp before YYYY-MM-DD")
 @click.option("--format", "output_format", default="csv", type=click.Choice(["csv", "json", "parquet"]))
 def archive(path: str | None, older_than: str | None, output_format: str) -> None:
-    db_path = Path(path) if path else Path("scopio.db")
+    db_path = Path(path) if path else click.get_current_context().obj["output_dir"] / "scopio.db"
     if not db_path.exists():
         raise click.ClickException(f"Database not found: {db_path}")
 
@@ -249,13 +250,7 @@ def archive(path: str | None, older_than: str | None, output_format: str) -> Non
         click.echo("Nothing to archive.")
         return
 
-    out_dir = Path(".")
-    try:
-        parent_ctx = click.get_current_context().parent
-        if parent_ctx and parent_ctx.obj and parent_ctx.obj.get("output_dir"):
-            out_dir = Path(parent_ctx.obj["output_dir"])
-    except RuntimeError:
-        pass
+    out_dir = click.get_current_context().obj["output_dir"]
     out_dir.mkdir(parents=True, exist_ok=True)
     if output_format == "csv":
         out = out_dir / "scopio_archive.csv"

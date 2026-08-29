@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Output artifacts moved to dedicated `.scopio/` directory**: database, JSON, CSV, Markdown files now default to `.scopio/` instead of CWD (`--output-dir` override still works).\n- `archive` command now resolves default DB path and output directory from the shared context, respecting `--output-dir` consistently.\n- `.gitignore` updated: `.scopio/` replaces individual `scopio.db`, `scopio.json`, `scopio.csv`, `scopio.md` entries.\n\n
 - **Fixed bug in `_parse_lizard_output`**: CCN now reads from column 1 (CCN value) instead of column 2 (token count) and the summary/Total lines are filtered out so they don't inflate file counts and averages. This fixes quality gates reporting incorrectly.
 - `mypy` check added to CI workflow (`tests.yml`).
 - `pytest-cov` added to dev dependency group.
