@@ -35,6 +35,12 @@ jobs:
       - name: Run type checks
         run: uv run mypy scopio/
 
+      - name: Build distributions
+        run: uv build
+
+      - name: Check package metadata
+        run: uvx twine check dist/*
+
   self-audit:
     runs-on: ubuntu-latest
     steps:
