@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+from datetime import UTC
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -605,3 +607,99 @@ def test_validate_tool_versions_unparseable() -> None:
     warnings = _validate_tool_versions({"scc": "garbage", "lizard": "1.24.0"})
     assert len(warnings) == 1
     assert "unparseable" in warnings[0]
+
+
+# ─── _filter_incremental tests ───────────────────────────────────────
+
+def test_filter_incremental_no_recent_files(tmp_path: Path) -> None:
+    """Project with no recent files should NOT be selected."""
+    from datetime import datetime
+
+    config = tmp_path / "scopio.toml"
+    config.write_text("[discovery]\nprojects = [\"old-proj\"]\n[quality_gates]\nmax_ccn = 10.0\nmax_warnings = 10\n")
+
+    proj = tmp_path / "projects" / "old-proj"
+    proj.mkdir(parents=True)
+
+    # Create an old file (timestamp before epoch so it's always "old")
+    old_file = proj / "old.py"
+    old_file.write_text("x = 1\n")
+    old_mtime = datetime(2020, 1, 1, tzinfo=UTC).timestamp()
+    os.utime(old_file, (old_mtime, old_mtime))
+
+    auditor = MetricsAuditor(config, tmp_path / "projects", tmp_path)
+
+    # Simulate a last run time in the future to make all files "old"
+    # We need to monkeypatch _get_last_metrics to return a timestamp in the future
+    original = auditor._get_last_metrics
+    auditor._get_last_metrics = lambda proj: {  # type: ignore[method-assign]
+        "timestamp": "2026-12-31 23:59:59+00:00",
+        "loc": 1, "ccn": 1.0, "warnings": 0,
+    }
+
+    result = auditor._filter_incremental(["old-proj"])
+    assert len(result) == 0, f"Expected no selection, got {result}"
+    auditor._get_last_metrics = original
+
+
+def test_filter_incremental_recent_file(tmp_path: Path) -> None:
+    """Project with a recent file should be selected."""
+    config = tmp_path / "scopio.toml"
+    config.write_text("[discovery]\nprojects = [\"recent-proj\"]\n[quality_gates]\nmax_ccn = 10.0\nmax_warnings = 10\n")
+
+    proj = tmp_path / "projects" / "recent-proj"
+    proj.mkdir(parents=True)
+    (proj / "main.py").write_text("x = 1\n")
+    # File is newly created, so mtime is "now"
+
+    auditor = MetricsAuditor(config, tmp_path / "projects", tmp_path)
+
+    # Last run was in the past
+    auditor._get_last_metrics = lambda proj: {  # type: ignore[method-assign]
+        "timestamp": "2020-01-01 00:00:00+00:00",
+        "loc": 1, "ccn": 1.0, "warnings": 0,
+    }
+
+    result = auditor._filter_incremental(["recent-proj"])
+    assert len(result) == 1, f"Expected selection, got {result}"
+    assert result[0] == "recent-proj"
+
+
+def test_filter_incremental_subdir_recent(tmp_path: Path) -> None:
+    """File in subdirectory should also trigger selection."""
+    config = tmp_path / "scopio.toml"
+    config.write_text("[discovery]\nprojects = [\"sub-proj\"]\n[quality_gates]\nmax_ccn = 10.0\nmax_warnings = 10\n")
+
+    proj = tmp_path / "projects" / "sub-proj"
+    proj.mkdir(parents=True)
+    sub = proj / "src" / "sub"
+    sub.mkdir(parents=True)
+    (sub / "deep.py").write_text("x = 1\n")
+
+    auditor = MetricsAuditor(config, tmp_path / "projects", tmp_path)
+
+    auditor._get_last_metrics = lambda proj: {  # type: ignore[method-assign]
+        "timestamp": "2020-01-01 00:00:00+00:00",
+        "loc": 1, "ccn": 1.0, "warnings": 0,
+    }
+
+    result = auditor._filter_incremental(["sub-proj"])
+    assert len(result) == 1, f"Expected selection, got {result}"
+
+
+def test_filter_incremental_no_previous_audit(tmp_path: Path) -> None:
+    """Project with no previous audit should always be selected."""
+    config = tmp_path / "scopio.toml"
+    config.write_text("[discovery]\nprojects = [\"new-proj\"]\n[quality_gates]\nmax_ccn = 10.0\nmax_warnings = 10\n")
+
+    proj = tmp_path / "projects" / "new-proj"
+    proj.mkdir(parents=True)
+    (proj / "main.py").write_text("x = 1\n")
+
+    auditor = MetricsAuditor(config, tmp_path / "projects", tmp_path)
+
+    # No previous audit -> _get_last_metrics returns None
+    auditor._get_last_metrics = lambda proj: None  # type: ignore[method-assign]
+
+    result = auditor._filter_incremental(["new-proj"])
+    assert len(result) == 1, f"Expected new project selected, got {result}"

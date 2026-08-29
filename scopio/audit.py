@@ -693,6 +693,10 @@ class MetricsAuditor:
         return max(1, min(projects, cpu * 2))
 
     def _filter_incremental(self, targets: list[str]) -> list[str]:
+        """Return only projects that changed since last audit.
+        Uses Path.rglob with early-exit: stops scanning a directory as soon as
+        a single recent file is found.
+        """
         selected = []
         for target in targets:
             row = self._get_last_metrics(target)
@@ -704,22 +708,27 @@ class MetricsAuditor:
                 continue
 
             last_run = row.get("timestamp") or ""
-            latest_mtime = None
-            for root, _dirs, files in os.walk(proj_path):
-                for name in files:
-                    path = Path(root) / name
-                    mtime = path.stat().st_mtime
-                    latest_mtime = mtime if latest_mtime is None else max(latest_mtime, mtime)
-
-            if latest_mtime is None:
+            if not last_run:
                 selected.append(target)
                 continue
 
             from datetime import datetime
 
             last_run_dt = datetime.fromisoformat(last_run).replace(tzinfo=UTC)
-            changed = datetime.fromtimestamp(latest_mtime, tz=UTC) > last_run_dt
-            if changed:
+            found_recent = False
+
+            for fpath in proj_path.rglob("*"):
+                if not fpath.is_file():
+                    continue
+                try:
+                    mtime = fpath.stat().st_mtime
+                except OSError:
+                    continue
+                if datetime.fromtimestamp(mtime, tz=UTC) > last_run_dt:
+                    found_recent = True
+                    break  # early-exit: one recent file is enough
+
+            if found_recent:
                 selected.append(target)
         return selected
 

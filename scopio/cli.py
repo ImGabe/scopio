@@ -176,38 +176,45 @@ def clean(ctx: click.Context, keep: int) -> None:
         return
 
     with open_db(db_path) as conn:
-        # Remove orphaned child rows first (file_metrics, metrics_history)
+        # Per-project cleanup: keep last N audits per project using correlated subquery
+        keep_sql = """(
+            SELECT m2.audit_id FROM metrics m2
+            WHERE m2.project = m.project
+            ORDER BY m2.timestamp DESC
+            LIMIT ?
+        )"""
+
         conn.execute(
-            """
+            f"""
             DELETE FROM file_metrics
             WHERE audit_id NOT IN (
-                SELECT audit_id FROM metrics ORDER BY timestamp DESC LIMIT ?
+                SELECT m.audit_id FROM metrics m
+                WHERE m.audit_id IN {keep_sql}
             )
             """,
             (keep,),
         )
         conn.execute(
-            """
+            f"""
             DELETE FROM metrics_history
             WHERE audit_id NOT IN (
-                SELECT audit_id FROM metrics ORDER BY timestamp DESC LIMIT ?
+                SELECT m.audit_id FROM metrics m
+                WHERE m.audit_id IN {keep_sql}
             )
             """,
             (keep,),
         )
-        # Then remove the metrics rows themselves
         conn.execute(
-            """
+            f"""
             DELETE FROM metrics
             WHERE audit_id NOT IN (
-                SELECT audit_id FROM metrics
-                ORDER BY timestamp DESC
-                LIMIT ?
+                SELECT m.audit_id FROM metrics m
+                WHERE m.audit_id IN {keep_sql}
             )
             """,
             (keep,),
         )
-    click.echo(f"Cleanup done. Keeping last {keep} audits.")
+    click.echo(f"Cleanup done. Keeping last {keep} audits per project.")
 
 
 @cli.command("ci")
