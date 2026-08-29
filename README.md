@@ -153,6 +153,8 @@ jobs:
 
 This project uses [uv](https://docs.astral.sh/uv/) as the Python toolchain.
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the commit convention and release workflow.
+
 ```bash
 # Sync dependencies and create a virtual environment
 uv sync
