@@ -161,8 +161,8 @@ def test_ci_command_success(seeded_db: Path, tmp_path: Path) -> None:
     assert "proj1" in result.output
 
 
-def test_ci_command_fail_on_regression(seeded_db: Path, tmp_path: Path) -> None:
-    """With --fail-on-regression but CCN improved, should pass."""
+def test_ci_command_fail_on_regression_when_loc_increases(seeded_db: Path, tmp_path: Path) -> None:
+    """--fail-on-regression should fail when the CI summary reports a failure."""
     runner = CliRunner()
     result = runner.invoke(
         cli,
@@ -177,8 +177,50 @@ def test_ci_command_fail_on_regression(seeded_db: Path, tmp_path: Path) -> None:
             "--fail-on-regression",
         ],
     )
-    assert result.exit_code == 0, f"Should pass (CCN improved): {result.output}"
-    assert "regression" not in result.output.lower()
+    assert result.exit_code != 0, f"Should fail (LOC increased): {result.output}"
+    assert "failed" in result.output.lower()
+    assert "LOC increased" in result.output
+
+
+def test_ci_command_fail_on_regression_when_clean(seeded_db: Path, tmp_path: Path) -> None:
+    """--fail-on-regression should pass when there is no CI rule failure."""
+    with open_db(seeded_db) as conn:
+        conn.execute(
+            "INSERT INTO metrics (project, loc, ccn, warnings, branch, commit_hash, runs_count) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("clean-proj", 100, 5.0, 2, "main", "ccc001", 1),
+        )
+        aid1 = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        conn.execute(
+            "INSERT INTO metrics_history (audit_id, project, loc, ccn, warnings) VALUES (?, ?, ?, ?, ?)",
+            (aid1, "clean-proj", 100, 5.0, 2),
+        )
+        conn.execute(
+            "INSERT INTO metrics (project, loc, ccn, warnings, branch, commit_hash, runs_count) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("clean-proj", 100, 4.0, 1, "main", "ccc002", 1),
+        )
+        aid2 = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        conn.execute(
+            "INSERT INTO metrics_history (audit_id, project, loc, ccn, warnings) VALUES (?, ?, ?, ?, ?)",
+            (aid2, "clean-proj", 100, 4.0, 1),
+        )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "--config",
+            str(tmp_path / "scopio.toml"),
+            "--output-dir",
+            str(tmp_path),
+            "ci",
+            "--project",
+            "clean-proj",
+            "--fail-on-regression",
+        ],
+    )
+    assert result.exit_code == 0, f"Should pass (no regressions): {result.output}"
 
 
 # ─── Edge cases ────────────────────────────────────────────────────

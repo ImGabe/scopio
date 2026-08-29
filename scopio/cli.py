@@ -8,7 +8,14 @@ import click
 
 from .audit import MetricsAuditor
 from .db import open_db
-from .diff import project_diff, project_file_diff, render_ci_summary, render_file_markdown, render_markdown
+from .diff import (
+    _detect_ci_failures,
+    project_diff,
+    project_file_diff,
+    render_ci_summary,
+    render_file_markdown,
+    render_markdown,
+)
 from .types import AuditResult
 
 
@@ -228,22 +235,9 @@ def ci_cmd(ctx: click.Context, project: str, fail_on_regression: bool) -> None:
     click.echo(output)
 
     if fail_on_regression:
-        # Read trend threshold from config (default 0.2)
-        config_path = ctx.obj["config_path"]
-        trend_threshold = 0.2
-        if config_path.exists():
-            from .audit import _load_config
-
-            try:
-                cfg = _load_config(config_path)
-                trend_threshold = cfg.get("quality_gates", {}).get("max_ccn_trend_increase", 0.2)
-            except Exception:
-                pass
-        ccn_trend = summary["delta"].get("ccn_trend") or 0
-        if ccn_trend > trend_threshold:
-            raise click.ClickException(
-                f"Regression detected: CCN increased {ccn_trend:.1%} (threshold: {trend_threshold:.0%})."
-            )
+        failures = _detect_ci_failures(summary)  # type: ignore[arg-type]
+        if failures:
+            raise click.ClickException(f"CI check failed: {'; '.join(failures)}")
 
 
 @cli.command()
