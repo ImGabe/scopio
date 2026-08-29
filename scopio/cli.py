@@ -79,7 +79,7 @@ def report(ctx: click.Context, project: str, limit: int) -> None:
     with open_db(db_path) as conn:
         rows = conn.execute(
             """
-            SELECT project, language, files, loc, code, nloc, ccn, warnings,
+            SELECT project, language, files, loc, code, nloc, ccn, ccn_max, warnings,
                    commits, last_commit_date, author, branch, dirty, commit_hash, runs_count, timestamp
             FROM metrics
             WHERE project = ?
@@ -95,34 +95,31 @@ def report(ctx: click.Context, project: str, limit: int) -> None:
     for row in rows:
         click.echo(
             f"{row['timestamp']} | {row['branch']} | {row['commit_hash']} | "
-            f"loc={row['loc']} ccn={row['ccn']} warnings={row['warnings']}"
+            f"loc={row['loc']} ccn={row['ccn']} ccn_max={row['ccn_max']} warnings={row['warnings']}"
             f"{' | runs=' + str(row['runs_count']) if row['runs_count'] and row['runs_count'] > 1 else ''}"
         )
 
 
 @cli.command("diff")
 @click.option("--project", required=True, help="Project name")
-@click.option("--base", default=None, help="Base timestamp for diff")
+@click.option(
+    "--base",
+    type=click.Choice(["previous", "first"]),
+    default="previous",
+    show_default=True,
+    help="Base audit for comparison",
+)
 @click.pass_context
-def diff(ctx: click.Context, project: str, base: str | None) -> None:
+def diff(ctx: click.Context, project: str, base: str) -> None:
     db_path = ctx.obj["output_dir"] / "scopio.db"
-    summary = project_diff(db_path, project)
-
-    if base and summary["base"]["timestamp"] != base:
-        with open_db(db_path) as conn:
-            row = conn.execute(
-                "SELECT timestamp, branch, commit_hash, loc, ccn, warnings, dirty FROM metrics WHERE project = ? AND timestamp = ?",
-                (project, base),
-            ).fetchone()
-        if not row:
-            raise click.ClickException(f"Base '{base}' not found for project '{project}'.")
-        summary["base"] = dict(row)  # type: ignore[typeddict-item]
+    summary = project_diff(db_path, project, base=base)
 
     click.echo(f"Project: {project}")
     click.echo(f"Base : {summary['base']['timestamp']} ({summary['base']['branch']})")
     click.echo(f"Current: {summary['latest']['timestamp']} ({summary['latest']['branch']})")
     click.echo(f"LOC  : {summary['base']['loc']} -> {summary['latest']['loc']} ({summary['delta']['loc']:+})")
     click.echo(f"CCN  : {summary['base']['ccn']} -> {summary['latest']['ccn']} ({summary['delta']['ccn']:+.2f})")
+    click.echo(f"MaxCCN: {summary['base']['ccn_max']} -> {summary['latest']['ccn_max']}")
     click.echo(
         f"Warn : {summary['base']['warnings']} -> {summary['latest']['warnings']} ({summary['delta']['warnings']:+})"
     )
@@ -133,6 +130,13 @@ def diff(ctx: click.Context, project: str, base: str | None) -> None:
 @click.option("--format", "output_format", default="text", type=click.Choice(["text", "json", "md"]))
 @click.option("--files", is_flag=True, help="Include per-file granular diff")
 @click.option("--threshold-ccn", default=None, type=float, help="CCN threshold to highlight files")
+@click.option(
+    "--base",
+    type=click.Choice(["previous", "first"]),
+    default="previous",
+    show_default=True,
+    help="Base audit for comparison",
+)
 @click.pass_context
 def diff_report(
     ctx: click.Context,
@@ -140,12 +144,13 @@ def diff_report(
     output_format: str,
     files: bool,
     threshold_ccn: float | None,
+    base: str,
 ) -> None:
     db_path = ctx.obj["output_dir"] / "scopio.db"
-    summary = project_diff(db_path, project)
+    summary = project_diff(db_path, project, base=base)
 
     if files:
-        summary = project_file_diff(db_path, project, threshold_ccn=threshold_ccn)  # type: ignore[assignment]
+        summary = project_file_diff(db_path, project, threshold_ccn=threshold_ccn, base=base)  # type: ignore[assignment]
 
     if output_format == "json":
         click.echo(json.dumps(summary, indent=2))
@@ -156,21 +161,22 @@ def diff_report(
             click.echo(render_markdown(summary))  # type: ignore[arg-type]
     else:
         if files:
-            file_summary = project_file_diff(db_path, project, threshold_ccn=threshold_ccn)
+            file_summary = project_file_diff(db_path, project, threshold_ccn=threshold_ccn, base=base)
             click.echo(f"Project: {project}")
             click.echo(f"Monitored files: {file_summary['summary']['total_files']}")
             click.echo(f"Changed: {file_summary['summary']['changed_files']}")
             click.echo(f"Above threshold: {file_summary['summary']['over_threshold_files']}")
         else:
-            base = summary["base"]
+            base_snapshot = summary["base"]
             latest = summary["latest"]
             delta = summary["delta"]
             click.echo(f"Project: {project}")
-            click.echo(f"Base : {base['timestamp']} ({base['branch']})")
+            click.echo(f"Base : {base_snapshot['timestamp']} ({base_snapshot['branch']})")
             click.echo(f"Current: {latest['timestamp']} ({latest['branch']})")
-            click.echo(f"LOC  : {base['loc']} -> {latest['loc']} ({delta['loc']:+})")
-            click.echo(f"CCN  : {base['ccn']} -> {latest['ccn']} ({delta['ccn']:+.2f})")
-            click.echo(f"Warn : {base['warnings']} -> {latest['warnings']} ({delta['warnings']:+})")
+            click.echo(f"LOC  : {base_snapshot['loc']} -> {latest['loc']} ({delta['loc']:+})")
+            click.echo(f"CCN  : {base_snapshot['ccn']} -> {latest['ccn']} ({delta['ccn']:+.2f})")
+            click.echo(f"MaxCCN: {base_snapshot['ccn_max']} -> {latest['ccn_max']}")
+            click.echo(f"Warn : {base_snapshot['warnings']} -> {latest['warnings']} ({delta['warnings']:+})")
 
 
 @cli.command()
@@ -224,6 +230,22 @@ def clean(ctx: click.Context, keep: int) -> None:
     click.echo(f"Cleanup done. Keeping last {keep} audits per project.")
 
 
+def _ci_thresholds(ctx: click.Context) -> dict[str, float]:
+    """Read CI trend thresholds from the config."""
+    config_path = ctx.obj["config_path"]
+    thresholds = {"ccn_trend": 0.2, "loc_trend": 0.0}
+    if config_path.exists():
+        from .audit import _load_config
+
+        try:
+            cfg = _load_config(config_path)
+        except Exception:
+            return thresholds
+        thresholds["ccn_trend"] = float(cfg.get("quality_gates", {}).get("max_ccn_trend_increase", 0.2))
+        thresholds["loc_trend"] = float((cfg.get("ci", {}) or {}).get("max_loc_trend_increase", 0.0))
+    return thresholds
+
+
 @cli.command("ci")
 @click.option("--project", required=True, help="Project name")
 @click.option("--fail-on-regression", is_flag=True, help="Fail if metrics regressed")
@@ -231,11 +253,12 @@ def clean(ctx: click.Context, keep: int) -> None:
 def ci_cmd(ctx: click.Context, project: str, fail_on_regression: bool) -> None:
     db_path = ctx.obj["output_dir"] / "scopio.db"
     summary = project_diff(db_path, project)
-    output = render_ci_summary(summary)  # type: ignore[arg-type]
+    thresholds = _ci_thresholds(ctx)
+    output = render_ci_summary(summary, thresholds=thresholds)  # type: ignore[arg-type]
     click.echo(output)
 
     if fail_on_regression:
-        failures = _detect_ci_failures(summary)  # type: ignore[arg-type]
+        failures = _detect_ci_failures(summary, thresholds=thresholds)  # type: ignore[arg-type]
         if failures:
             raise click.ClickException(f"CI check failed: {'; '.join(failures)}")
 
@@ -250,7 +273,7 @@ def archive(path: str | None, older_than: str | None, output_format: str) -> Non
         raise click.ClickException(f"Database not found: {db_path}")
 
     query = """
-        SELECT project, language, files, loc, code, nloc, ccn, warnings,
+        SELECT project, language, files, loc, code, nloc, ccn, ccn_max, warnings,
                commits, last_commit_date, author, branch, dirty, commit_hash,
                tool_versions, duration_seconds, runs_count, timestamp
         FROM metrics
@@ -320,6 +343,7 @@ ignored_langs = [
 
 [quality_gates]
 max_ccn = 10.0
+max_function_ccn = 15.0
 max_warnings = 10
 max_ccn_trend_increase = 0.2
 trend_sensitive_projects = []
@@ -329,6 +353,9 @@ trend_sensitive_projects = []
 
 [quality_gates.per_language]
 # Python = { max_ccn = 12.0, max_warnings = 20 }
+
+[ci]
+max_loc_trend_increase = 0.0  # fail if LOC grows above this ratio (0.0 = any growth fails)
 """
     config.write_text(sample)
     click.echo(f"Created: {config}")

@@ -15,11 +15,11 @@ def _safe_num(value: Any, default: float = 0) -> float:
     return value if value is not None else default
 
 
-def project_diff(db_path: Path, project: str) -> DiffSummary:
+def project_diff(db_path: Path, project: str, base: str = "previous") -> DiffSummary:
     with open_db(db_path) as conn:
         rows = conn.execute(
             """
-            SELECT timestamp, branch, commit_hash, loc, ccn, warnings, dirty,
+            SELECT timestamp, branch, commit_hash, loc, ccn, ccn_max, warnings, dirty,
                    tool_versions, duration_seconds
             FROM metrics
             WHERE project = ?
@@ -31,30 +31,31 @@ def project_diff(db_path: Path, project: str) -> DiffSummary:
     if len(rows) < 2:
         raise click.ClickException("Not enough history for diff (requires at least 2 audits).")
 
-    base = dict(rows[0])
+    base_row = dict(rows[0] if base == "first" else rows[-2])
     latest = dict(rows[-1])
 
-    loc_delta = _safe_num(latest.get("loc")) - _safe_num(base.get("loc"))
-    ccn_delta = _safe_num(latest.get("ccn")) - _safe_num(base.get("ccn"))
-    warn_delta = _safe_num(latest.get("warnings")) - _safe_num(base.get("warnings"))
+    loc_delta = _safe_num(latest.get("loc")) - _safe_num(base_row.get("loc"))
+    ccn_delta = _safe_num(latest.get("ccn")) - _safe_num(base_row.get("ccn"))
+    warn_delta = _safe_num(latest.get("warnings")) - _safe_num(base_row.get("warnings"))
 
     loc_trend = None
-    if base.get("loc"):
-        loc_trend = loc_delta / base["loc"]
+    if base_row.get("loc"):
+        loc_trend = loc_delta / base_row["loc"]
 
     ccn_trend = None
-    if base.get("ccn"):
-        ccn_trend = ccn_delta / base["ccn"]
+    if base_row.get("ccn"):
+        ccn_trend = ccn_delta / base_row["ccn"]
 
     return {
         "project": project,
         "base": {
-            "timestamp": base.get("timestamp"),
-            "branch": base.get("branch"),
-            "commit_hash": base.get("commit_hash"),
-            "loc": base.get("loc"),
-            "ccn": base.get("ccn"),
-            "warnings": base.get("warnings"),
+            "timestamp": base_row.get("timestamp"),
+            "branch": base_row.get("branch"),
+            "commit_hash": base_row.get("commit_hash"),
+            "loc": base_row.get("loc"),
+            "ccn": base_row.get("ccn"),
+            "ccn_max": base_row.get("ccn_max"),
+            "warnings": base_row.get("warnings"),
         },
         "latest": {
             "timestamp": latest.get("timestamp"),
@@ -62,6 +63,7 @@ def project_diff(db_path: Path, project: str) -> DiffSummary:
             "commit_hash": latest.get("commit_hash"),
             "loc": latest.get("loc"),
             "ccn": latest.get("ccn"),
+            "ccn_max": latest.get("ccn_max"),
             "warnings": latest.get("warnings"),
             "dirty": latest.get("dirty"),
         },
@@ -93,14 +95,25 @@ def _fetch_project_audit_rows(db_path: Path, project: str) -> list[sqlite3.Row]:
 
 
 def _fetch_file_metrics_by_audit_id(db_path: Path, audit_id: int) -> dict[str, dict[str, Any]]:
-    """Return {path: row_dict} for a given audit_id."""
+    """Return {path: aggregated_row} for a given audit_id.
+
+    ``file_metrics`` stores one row per function; aggregate by path using
+    NLOC = sum, CCN = max (worst function) and warnings = sum.
+    """
+    aggregated: dict[str, dict[str, Any]] = {}
     with open_db(db_path) as conn:
-        return {
-            row["path"]: dict(row)
-            for row in conn.execute(
-                "SELECT path, nloc, ccn, warnings FROM file_metrics WHERE audit_id = ?", (audit_id,)
-            ).fetchall()
-        }
+        rows = conn.execute(
+            "SELECT path, nloc, ccn, warnings FROM file_metrics WHERE audit_id = ?", (audit_id,)
+        ).fetchall()
+
+    for row in rows:
+        path = row["path"]
+        entry = aggregated.setdefault(path, {"path": path, "nloc": 0, "ccn": 0.0, "warnings": 0})
+        entry["nloc"] += row["nloc"] or 0
+        entry["ccn"] = max(entry["ccn"], _safe_num(row["ccn"]))
+        entry["warnings"] += row["warnings"] or 0
+
+    return aggregated
 
 
 def _compute_file_delta(
@@ -159,17 +172,19 @@ def _snapshot_meta(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def project_file_diff(db_path: Path, project: str, threshold_ccn: float | None = None) -> dict[str, Any]:
+def project_file_diff(
+    db_path: Path, project: str, threshold_ccn: float | None = None, base: str = "previous"
+) -> dict[str, Any]:
     rows = _fetch_project_audit_rows(db_path, project)
 
     if len(rows) < 2:
         raise click.ClickException("Not enough history for granular diff (requires at least 2 audits).")
 
-    base_meta = dict(rows[0])
-    latest_meta = dict(rows[-1])
+    base_row = dict(rows[0] if base == "first" else rows[-2])
+    latest_row = dict(rows[-1])
 
-    base_files = _fetch_file_metrics_by_audit_id(db_path, rows[0]["audit_id"])
-    latest_files = _fetch_file_metrics_by_audit_id(db_path, rows[-1]["audit_id"])
+    base_files = _fetch_file_metrics_by_audit_id(db_path, base_row["audit_id"])
+    latest_files = _fetch_file_metrics_by_audit_id(db_path, latest_row["audit_id"])
 
     all_paths = sorted(set(base_files) | set(latest_files))
     files = [
@@ -178,8 +193,8 @@ def project_file_diff(db_path: Path, project: str, threshold_ccn: float | None =
 
     return {
         "project": project,
-        "base": _snapshot_meta(base_meta),
-        "latest": _snapshot_meta(latest_meta),
+        "base": _snapshot_meta(base_row),
+        "latest": _snapshot_meta(latest_row),
         "threshold_ccn": threshold_ccn,
         "files": files,
         "summary": _summarize_file_changes(files),
@@ -192,11 +207,11 @@ def _render_diff_header(summary: dict[str, Any]) -> list[str]:
         "",
         "## Base",
         f"- {summary['base']['timestamp']} (`{summary['base']['branch']}`) `{summary['base']['commit_hash']}`",
-        f"- LOC {summary['base']['loc']} | CCN {summary['base']['ccn']} | warnings {summary['base']['warnings']}",
+        f"- LOC {summary['base']['loc']} | CCN {summary['base']['ccn']} (max {summary['base']['ccn_max']}) | warnings {summary['base']['warnings']}",
         "",
         "## Latest",
         f"- {summary['latest']['timestamp']} (`{summary['latest']['branch']}`) `{summary['latest']['commit_hash']}`",
-        f"- LOC {summary['latest']['loc']} | CCN {summary['latest']['ccn']} | warnings {summary['latest']['warnings']}",
+        f"- LOC {summary['latest']['loc']} | CCN {summary['latest']['ccn']} (max {summary['latest']['ccn_max']}) | warnings {summary['latest']['warnings']}",
         "",
     ]
 
@@ -281,43 +296,35 @@ CI_RULES: list[tuple[str, str, str]] = [
     ("ccn_trend", "trend", "CCN increased by {:.2%}"),
     ("loc_trend", "trend", "LOC increased by {:.2%}"),
     ("warnings", "absolute", "Warnings increased from {} to {}"),
-    ("ccn", "regression", "CCN regressed from {} to {}"),
-    ("loc", "decrease", "LOC decreased from {} to {}"),
 ]
 
 
-def _detect_ci_failures(summary: dict[str, Any]) -> list[str]:
-    """Check summary against CI rules and return list of failure messages."""
+def _detect_ci_failures(summary: dict[str, Any], thresholds: dict[str, float] | None = None) -> list[str]:
+    """Check summary against CI rules and return list of failure messages.
+
+    Trend rules use a per-key threshold from ``thresholds`` (default 0.0).
+    """
     base = summary["base"]
     latest = summary["latest"]
     delta = summary["delta"]
+    thresholds = thresholds or {}
 
     failures = []
     for key, rule_type, fmt in CI_RULES:
         if rule_type == "trend":
             val = delta.get(key)
-            if val is not None and val > 0:
+            if val is not None and val > thresholds.get(key, 0.0):
                 failures.append(fmt.format(val))
         elif rule_type == "absolute":
             lv = latest.get(key) or 0
             bv = base.get(key) or 0
             if lv > bv:
                 failures.append(fmt.format(bv, lv))
-        elif rule_type == "regression":
-            lv = latest.get(key)
-            bv = base.get(key) or 0
-            if lv is not None and bv > 0 and lv > bv:
-                failures.append(fmt.format(bv, lv))
-        elif rule_type == "decrease":
-            lv = latest.get(key)
-            bv = base.get(key, 0)
-            if lv is not None and lv < bv:
-                failures.append(fmt.format(bv, lv))
     return failures
 
 
-def render_ci_summary(summary: dict[str, Any]) -> str:
-    failures = _detect_ci_failures(summary)
+def render_ci_summary(summary: dict[str, Any], thresholds: dict[str, float] | None = None) -> str:
+    failures = _detect_ci_failures(summary, thresholds)
 
     payload = {
         "status": "failed" if failures else "passed",
@@ -328,6 +335,7 @@ def render_ci_summary(summary: dict[str, Any]) -> str:
             "commit": summary["base"].get("commit_hash"),
             "loc": summary["base"].get("loc"),
             "ccn": summary["base"].get("ccn"),
+            "ccn_max": summary["base"].get("ccn_max"),
             "warnings": summary["base"].get("warnings"),
         },
         "latest": {
@@ -336,6 +344,7 @@ def render_ci_summary(summary: dict[str, Any]) -> str:
             "commit": summary["latest"].get("commit_hash"),
             "loc": summary["latest"].get("loc"),
             "ccn": summary["latest"].get("ccn"),
+            "ccn_max": summary["latest"].get("ccn_max"),
             "warnings": summary["latest"].get("warnings"),
             "dirty": summary["latest"].get("dirty"),
         },

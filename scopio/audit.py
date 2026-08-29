@@ -212,9 +212,12 @@ def _parse_lizard_csv(output: str) -> LizardSummary:
 
     from typing import cast
 
+    ccn_max = round(max(fm["ccn"] for fm in file_metrics), 1) if file_metrics else 0.0
+
     return {
         "nloc": total_nloc,
         "ccn": total_ccn,
+        "ccn_max": ccn_max,
         "warnings": warning_count,
         "files": [cast(LizardFile, fm) for fm in file_metrics],
     }
@@ -239,71 +242,6 @@ def _run_scc(proj_path: Path, excludes: list[str]) -> list[SccRecord]:
         return data if isinstance(data, list) else []
     except json.JSONDecodeError:
         return []
-
-
-def _parse_lizard_output(output: str) -> dict[str, Any]:
-    lines = [line.strip() for line in output.splitlines() if line.strip()]
-    if not lines:
-        return {"nloc": 0, "ccn": 0.0, "warnings": 0, "files": []}
-
-    # Attempt to parse the last non-comment line (Summary/Total)
-    parts = lines[-1].split()
-    try:
-        totals = {
-            "nloc": int(parts[0]),
-            "ccn": float(parts[1]),
-            "warnings": int(parts[5]),
-        }
-    except (IndexError, ValueError):
-        totals = {"nloc": 0, "ccn": 0.0, "warnings": 0}
-
-    file_metrics: list[dict[str, Any]] = []
-    total_nloc = 0
-    total_ccn = 0.0
-    warning_count = 0
-
-    for line in lines:
-        cols = line.split()
-        if len(cols) < 6:
-            continue
-
-        # Skip summary line and separator lines
-        if "<<<==" in line or "===" in line:
-            continue
-
-        location = cols[-1]
-        if "@" in location:
-            current_file = location.split("@")[-1]
-        else:
-            current_file = location
-
-        if not current_file or not line[0].isdigit():
-            continue
-
-        try:
-            nloc = int(cols[0])
-            ccn = float(cols[1])
-            warnings = int(cols[5])
-        except (IndexError, ValueError):
-            continue
-
-        total_nloc += nloc
-        total_ccn += ccn
-        warning_count += warnings
-        file_metrics.append(
-            {
-                "path": str(current_file),
-                "nloc": nloc,
-                "ccn": ccn,
-                "warnings": warnings,
-            }
-        )
-
-    if file_metrics:
-        totals["ccn"] = round(total_ccn / len(file_metrics), 1)
-        totals["nloc"] = total_nloc
-    totals["warnings"] = warning_count
-    return {**totals, "files": file_metrics}
 
 
 def _run_lizard(proj_path: Path, extra_excludes: list[str]) -> LizardSummary:
@@ -385,6 +323,7 @@ class MetricsAuditor:
             ON file_metrics(audit_id, path);""",
         ),
         (7, "ALTER TABLE metrics ADD COLUMN runs_count INTEGER NOT NULL DEFAULT 1"),
+        (8, "ALTER TABLE metrics_history ADD COLUMN ccn_max REAL"),
     ]
 
     def _init_db(self) -> None:
@@ -406,9 +345,10 @@ class MetricsAuditor:
             for ver, sql in self._MIGRATIONS:
                 if version < ver:
                     if sql.startswith("ALTER"):
-                        match = re.search(r"ADD\s+COLUMN\s+(\w+)", sql)
-                        col_name = match.group(1) if match else ""
-                        columns = self._table_columns(conn, "metrics")
+                        match = re.search(r"ALTER\s+TABLE\s+(\w+)\s+ADD\s+COLUMN\s+(\w+)", sql)
+                        table_name = match.group(1) if match else "metrics"
+                        col_name = match.group(2) if match else ""
+                        columns = self._table_columns(conn, table_name)
                         if col_name and col_name not in columns:
                             conn.executescript(sql)
                     else:
@@ -473,6 +413,7 @@ class MetricsAuditor:
         files = sum(item.get("Count", 0) for item in scc_data)
         nloc = lizard.get("nloc", 0)
         ccn = lizard.get("ccn", 0.0)
+        ccn_max = lizard.get("ccn_max", 0.0)
         warnings = lizard.get("warnings", 0)
         file_metrics = lizard.get("files", [])
 
@@ -494,6 +435,7 @@ class MetricsAuditor:
                 "code": code,
                 "nloc": nloc,
                 "ccn": ccn,
+                "ccn_max": ccn_max,
                 "warnings": warnings,
                 "commits": git["commits"],
                 "last_commit_date": git["last_commit_date"],
@@ -535,28 +477,30 @@ class MetricsAuditor:
         return warnings
 
     def _upsert_metrics_row(self, conn: sqlite3.Connection, result: AuditResult) -> int:
+        params = dict(result)
+        params.setdefault("ccn_max", None)
         cursor = conn.execute(
             """
             INSERT INTO metrics
-            (project, language, files, loc, code, nloc, ccn, warnings,
+            (project, language, files, loc, code, nloc, ccn, ccn_max, warnings,
              commits, last_commit_date, author, branch, dirty, commit_hash,
              tool_versions, duration_seconds, timestamp)
             VALUES
-            (:project, :language, :files, :loc, :code, :nloc, :ccn, :warnings,
+            (:project, :language, :files, :loc, :code, :nloc, :ccn, :ccn_max, :warnings,
              :commits, :last_commit_date, :author, :branch, :dirty, :commit_hash,
              :tool_versions, :duration_seconds, CURRENT_TIMESTAMP)
             ON CONFLICT(project, branch, commit_hash)
             DO UPDATE SET
                 language = excluded.language, files = excluded.files,
                 loc = excluded.loc, code = excluded.code, nloc = excluded.nloc,
-                ccn = excluded.ccn, warnings = excluded.warnings,
+                ccn = excluded.ccn, ccn_max = excluded.ccn_max, warnings = excluded.warnings,
                 commits = excluded.commits, last_commit_date = excluded.last_commit_date,
                 author = excluded.author, dirty = excluded.dirty,
                 tool_versions = excluded.tool_versions,
                 duration_seconds = excluded.duration_seconds,
                 timestamp = excluded.timestamp, runs_count = runs_count + 1
             """,
-            result,
+            params,
         )
         audit_id = cursor.lastrowid
         if cursor.rowcount == 0 or not audit_id:
@@ -573,8 +517,8 @@ class MetricsAuditor:
         conn.execute(
             """
             INSERT OR IGNORE INTO metrics_history
-            (audit_id, project, language, loc, ccn, warnings)
-            VALUES (:audit_id, :project, :language, :loc, :ccn, :warnings)
+            (audit_id, project, language, loc, ccn, ccn_max, warnings)
+            VALUES (:audit_id, :project, :language, :loc, :ccn, :ccn_max, :warnings)
             """,
             {
                 "audit_id": audit_id,
@@ -582,6 +526,7 @@ class MetricsAuditor:
                 "language": result.get("language"),
                 "loc": result.get("loc"),
                 "ccn": result.get("ccn"),
+                "ccn_max": result.get("ccn_max"),
                 "warnings": result.get("warnings"),
             },
         )
@@ -616,22 +561,29 @@ class MetricsAuditor:
         export_outputs(self.output_dir, results)
 
     @staticmethod
-    def _effective_limits(result: AuditResult, config: dict[str, Any]) -> tuple[float, int]:
+    def _effective_limits(result: AuditResult, config: dict[str, Any]) -> tuple[float, int, float | None]:
         quality_gates = config.get("quality_gates", {})
         max_ccn = float(quality_gates.get("max_ccn", 10.0))
         max_warnings = int(quality_gates.get("max_warnings", 10))
+        max_function_ccn = quality_gates.get("max_function_ccn")
         per_project = quality_gates.get("per_project", {}) or {}
         per_language = quality_gates.get("per_language", {}) or {}
 
         project_limits = per_project.get(result["project"])
         if project_limits:
-            return float(project_limits.get("max_ccn", max_ccn)), int(project_limits.get("max_warnings", max_warnings))
+            return (
+                float(project_limits.get("max_ccn", max_ccn)),
+                int(project_limits.get("max_warnings", max_warnings)),
+                project_limits.get("max_function_ccn", max_function_ccn),
+            )
         language_limits = per_language.get(result.get("language", ""))
         if language_limits:
-            return float(language_limits.get("max_ccn", max_ccn)), int(
-                language_limits.get("max_warnings", max_warnings)
+            return (
+                float(language_limits.get("max_ccn", max_ccn)),
+                int(language_limits.get("max_warnings", max_warnings)),
+                language_limits.get("max_function_ccn", max_function_ccn),
             )
-        return max_ccn, max_warnings
+        return max_ccn, max_warnings, max_function_ccn
 
     def _evaluate_quality_gates(
         self, results: list[AuditResult], config: dict[str, Any]
@@ -642,8 +594,11 @@ class MetricsAuditor:
 
         gate_failures = []
         for result in results:
-            limit_ccn, limit_warnings = self._effective_limits(result, config)
+            limit_ccn, limit_warnings, limit_function_ccn = self._effective_limits(result, config)
             if result["ccn"] > limit_ccn or result["warnings"] > limit_warnings:
+                gate_failures.append(result)
+                continue
+            if limit_function_ccn is not None and float(result.get("ccn_max") or 0.0) > limit_function_ccn:
                 gate_failures.append(result)
 
         trend_failures = []
@@ -662,6 +617,7 @@ class MetricsAuditor:
         quality_gates = self.config.get("quality_gates", {})
         return {
             "max_ccn": quality_gates.get("max_ccn", 10.0),
+            "max_function_ccn": quality_gates.get("max_function_ccn"),
             "max_warnings": quality_gates.get("max_warnings", 10),
             "max_ccn_trend_increase": quality_gates.get("max_ccn_trend_increase", 0.2),
         }

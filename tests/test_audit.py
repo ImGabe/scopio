@@ -18,7 +18,7 @@ from scopio.audit import (
     _run_scc,
 )
 
-# ─── _parse_lizard_output ────────────────────────────────────────────────
+# ─── _parse_lizard_csv ──────────────────────────────────────────────────
 
 # Realistic lizard output. Note: the parser counts the "Total" line as a file
 # and uses parts[2] (tokens) for initial CCN — pre-existing quirks.

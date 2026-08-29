@@ -46,10 +46,6 @@ TRIGGER_CASES = [
     (1, _summary_trend("loc_trend", -0.1), False, ""),  # LOC decreased
     (2, _summary_absolute(1, 5), True, "Warnings"),  # Warnings increased
     (2, _summary_absolute(5, 2), False, ""),  # Warnings decreased
-    (3, _summary_regression(2.0, 6.0), True, "CCN"),  # CCN regressed
-    (3, _summary_regression(6.0, 2.0), False, ""),  # CCN improved
-    (4, _summary_decrease(200, 100), True, "LOC decreased"),  # LOC decreased
-    (4, _summary_decrease(100, 200), False, ""),  # LOC increased
 ]
 
 
@@ -74,7 +70,7 @@ class TestCiRulesStructure:
             assert len(fmt) > 0, f"Rule {i}: empty fmt"
 
     def test_ci_rules_types_known(self) -> None:
-        known_types = {"trend", "absolute", "regression", "decrease"}
+        known_types = {"trend", "absolute"}
         for i, (_, rule_type, _) in enumerate(CI_RULES):
             assert rule_type in known_types, f"Rule {i}: unknown type '{rule_type}'"
 
@@ -92,10 +88,6 @@ class TestCiRulesTrigger:
             "loc_decreased",
             "warnings_increased",
             "warnings_decreased",
-            "ccn_regressed",
-            "ccn_improved",
-            "loc_decreased_rule",
-            "loc_increased_rule",
         ],
     )
     def test_rule_trigger(self, rule_idx: int, summary: dict, expect_fail: bool, expected_text: str) -> None:

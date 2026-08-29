@@ -29,6 +29,7 @@ class LizardFile(TypedDict, total=False):
 class LizardSummary(TypedDict, total=False):
     nloc: int
     ccn: float
+    ccn_max: float
     warnings: int
     files: list[LizardFile]
 
@@ -54,6 +55,7 @@ class AuditResult(TypedDict, total=False):
     code: int
     nloc: int
     ccn: float
+    ccn_max: float
     warnings: int
     commits: int
     last_commit_date: str
@@ -80,6 +82,7 @@ class DiffSnapshot(TypedDict, total=False):
     commit_hash: str | None
     loc: int | None
     ccn: float | None
+    ccn_max: float | None
     warnings: int | None
     dirty: bool | None
 

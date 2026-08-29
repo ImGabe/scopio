@@ -43,6 +43,7 @@ def _export_csv(output_dir: Path, enriched: list[dict[str, Any]]) -> None:
         "SCC_Code",
         "NLOC",
         "Avg_CCN",
+        "Max_CCN",
         "Warnings",
         "Commits",
         "Last_Commit",
@@ -66,6 +67,7 @@ def _export_csv(output_dir: Path, enriched: list[dict[str, Any]]) -> None:
                     r["code"],
                     r["nloc"],
                     f"{r['ccn']:.1f}",
+                    r.get("ccn_max") or "",
                     r["warnings"],
                     r["commits"],
                     r["last_commit_date"],
@@ -83,12 +85,12 @@ def _export_markdown(output_dir: Path, enriched: list[dict[str, Any]]) -> None:
     lines = [
         "# Project Metrics Summary",
         "",
-        "| Project | Language | Files | LOC | Code | NLOC | Avg CCN | Warnings | Commits | Last Commit | Author | Branch | Dirty | Runs | Duration | Tools |",
-        "|---------|----------|------:|----:|-----:|-----:|--------:|--------:|--------:|-------------|--------|-------|------|-----:|--------:|-------|",
+        "| Project | Language | Files | LOC | Code | NLOC | Avg CCN | Max CCN | Warnings | Commits | Last Commit | Author | Branch | Dirty | Runs | Duration | Tools |",
+        "|---------|----------|------:|----:|-----:|-----:|--------:|--------:|--------:|--------:|-------------|--------|-------|------|-----:|--------:|-------|",
     ]
     for r in enriched:
         lines.append(
-            f"| **{r['project']}** | {r['language']} | {r['files']} | {r['loc']} | {r['code']} | {r['nloc']} | {r['ccn']:.1f} | {r['warnings']} | {r['commits']} | {r['last_commit_date']} | {r['author']} | {r['branch']} | {str(bool(r['dirty'])).lower()} | {r.get('runs_count') or 1} | {r.get('duration_seconds') or '-'} | {_tools_str(r)} |"
+            f"| **{r['project']}** | {r['language']} | {r['files']} | {r['loc']} | {r['code']} | {r['nloc']} | {r['ccn']:.1f} | {r.get('ccn_max') or '-'} | {r['warnings']} | {r['commits']} | {r['last_commit_date']} | {r['author']} | {r['branch']} | {str(bool(r['dirty'])).lower()} | {r.get('runs_count') or 1} | {r.get('duration_seconds') or '-'} | {_tools_str(r)} |"
         )
     (output_dir / "scopio.md").write_text("\n".join(lines) + "\n")
 

@@ -22,7 +22,7 @@ def seeded_db(tmp_path: Path) -> Path:
             "CREATE TABLE IF NOT EXISTS metrics ("
             "audit_id INTEGER PRIMARY KEY AUTOINCREMENT, "
             "project TEXT, language TEXT, files INTEGER, loc INTEGER, code INTEGER, "
-            "nloc INTEGER, ccn REAL, warnings INTEGER, commits INTEGER, "
+            "nloc INTEGER, ccn REAL, ccn_max REAL, warnings INTEGER, commits INTEGER, "
             "last_commit_date TEXT, author TEXT, branch TEXT, dirty INTEGER, "
             "commit_hash TEXT, tool_versions TEXT, duration_seconds REAL, "
             "runs_count INTEGER DEFAULT 1, "
@@ -333,30 +333,6 @@ def test_ci_failures_warnings_increased() -> None:
     assert any("Warnings increased" in f for f in failures)
 
 
-def test_ci_failures_ccn_regressed() -> None:
-    from scopio.diff import _detect_ci_failures
-
-    summary = {
-        "base": {"ccn": 3.0, "loc": 100, "warnings": 0},
-        "latest": {"ccn": 5.0, "loc": 100, "warnings": 0},
-        "delta": {"ccn_trend": 0.67, "loc_trend": 0.0},
-    }
-    failures = _detect_ci_failures(summary)
-    assert any("CCN regressed" in f for f in failures)
-
-
-def test_ci_failures_loc_decreased() -> None:
-    from scopio.diff import _detect_ci_failures
-
-    summary = {
-        "base": {"ccn": 1.0, "loc": 200, "warnings": 0},
-        "latest": {"ccn": 1.0, "loc": 100, "warnings": 0},
-        "delta": {"ccn_trend": 0.0, "loc_trend": -0.5},
-    }
-    failures = _detect_ci_failures(summary)
-    assert any("LOC decreased" in f for f in failures)
-
-
 def test_ci_failures_all_clear() -> None:
     from scopio.diff import _detect_ci_failures
 
@@ -378,8 +354,24 @@ def test_render_markdown_empty() -> None:
 
     summary = {
         "project": "test-proj",
-        "base": {"timestamp": "now", "branch": "main", "commit_hash": "abc", "loc": 100, "ccn": 5.0, "warnings": 2},
-        "latest": {"timestamp": "now", "branch": "main", "commit_hash": "def", "loc": 100, "ccn": 5.0, "warnings": 2},
+        "base": {
+            "timestamp": "now",
+            "branch": "main",
+            "commit_hash": "abc",
+            "loc": 100,
+            "ccn": 5.0,
+            "ccn_max": 5.0,
+            "warnings": 2,
+        },
+        "latest": {
+            "timestamp": "now",
+            "branch": "main",
+            "commit_hash": "def",
+            "loc": 100,
+            "ccn": 5.0,
+            "ccn_max": 5.0,
+            "warnings": 2,
+        },
         "delta": {"loc": 0, "loc_trend": None, "ccn": 0.0, "ccn_trend": None, "warnings": 0},
     }
     result = render_markdown(summary)
@@ -394,8 +386,24 @@ def test_render_markdown_with_improvement() -> None:
 
     summary = {
         "project": "test-proj",
-        "base": {"timestamp": "old", "branch": "main", "commit_hash": "abc", "loc": 200, "ccn": 5.0, "warnings": 3},
-        "latest": {"timestamp": "new", "branch": "main", "commit_hash": "def", "loc": 150, "ccn": 3.0, "warnings": 1},
+        "base": {
+            "timestamp": "old",
+            "branch": "main",
+            "commit_hash": "abc",
+            "loc": 200,
+            "ccn": 5.0,
+            "ccn_max": 5.0,
+            "warnings": 3,
+        },
+        "latest": {
+            "timestamp": "new",
+            "branch": "main",
+            "commit_hash": "def",
+            "loc": 150,
+            "ccn": 3.0,
+            "ccn_max": 3.0,
+            "warnings": 1,
+        },
         "delta": {"loc": -50, "loc_trend": -0.25, "ccn": -2.0, "ccn_trend": -0.4, "warnings": -2},
     }
     result = render_markdown(summary)
@@ -462,8 +470,24 @@ def test_render_diff_delta_all_none() -> None:
 
     summary = {
         "project": "test-proj",
-        "base": {"timestamp": None, "branch": None, "commit_hash": None, "loc": 100, "ccn": 5.0, "warnings": 2},
-        "latest": {"timestamp": None, "branch": None, "commit_hash": None, "loc": 100, "ccn": 5.0, "warnings": 2},
+        "base": {
+            "timestamp": None,
+            "branch": None,
+            "commit_hash": None,
+            "loc": 100,
+            "ccn": 5.0,
+            "ccn_max": 5.0,
+            "warnings": 2,
+        },
+        "latest": {
+            "timestamp": None,
+            "branch": None,
+            "commit_hash": None,
+            "loc": 100,
+            "ccn": 5.0,
+            "ccn_max": 5.0,
+            "warnings": 2,
+        },
         "delta": {"loc": 0, "loc_trend": None, "ccn": 0.0, "ccn_trend": None, "warnings": 0},
     }
     result = render_markdown(summary)
