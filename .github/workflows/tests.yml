@@ -21,7 +21,10 @@ jobs:
       - name: Sync dependencies
         run: uv sync --frozen
       - name: Run tests
-        run: uv run pytest tests/ -q --cov=scopio --cov-fail-under=70 --cov-report=term
+        run: uv run pytest tests/ -q --cov=scopio --cov-fail-under=75 --cov-report=term
+
+      - name: Check diff.py coverage
+        run: uv run pytest tests/ -q --cov=scopio.diff --cov-fail-under=70 --cov-report=term
 
       - name: Run type checks
         run: uv run mypy scopio/

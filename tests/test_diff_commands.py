@@ -206,7 +206,8 @@ def test_diff_requires_two_audits(seeded_db: Path, tmp_path: Path) -> None:
 
     runner = CliRunner()
     result = runner.invoke(
-        cli, ["--config", str(tmp_path / "scopio.toml"), "--output-dir", str(tmp_path), "diff", "--project", "single-proj"]
+        cli,
+        ["--config", str(tmp_path / "scopio.toml"), "--output-dir", str(tmp_path), "diff", "--project", "single-proj"],
     )
     assert result.exit_code != 0
     assert "Not enough history" in result.output
@@ -324,3 +325,104 @@ def test_ci_failures_all_clear() -> None:
     }
     failures = _detect_ci_failures(summary)
     assert len(failures) == 0
+
+
+# ─── Render function tests ───────────────────────────────────────────
+
+
+def test_render_markdown_empty() -> None:
+    """render_markdown with empty summary should not crash."""
+    from scopio.diff import render_markdown
+
+    summary = {
+        "project": "test-proj",
+        "base": {"timestamp": "now", "branch": "main", "commit_hash": "abc", "loc": 100, "ccn": 5.0, "warnings": 2},
+        "latest": {"timestamp": "now", "branch": "main", "commit_hash": "def", "loc": 100, "ccn": 5.0, "warnings": 2},
+        "delta": {"loc": 0, "loc_trend": None, "ccn": 0.0, "ccn_trend": None, "warnings": 0},
+    }
+    result = render_markdown(summary)
+    assert isinstance(result, str)
+    assert len(result) > 0
+    assert "test-proj" in result
+
+
+def test_render_markdown_with_improvement() -> None:
+    """render_markdown with improvement trends."""
+    from scopio.diff import render_markdown
+
+    summary = {
+        "project": "test-proj",
+        "base": {"timestamp": "old", "branch": "main", "commit_hash": "abc", "loc": 200, "ccn": 5.0, "warnings": 3},
+        "latest": {"timestamp": "new", "branch": "main", "commit_hash": "def", "loc": 150, "ccn": 3.0, "warnings": 1},
+        "delta": {"loc": -50, "loc_trend": -0.25, "ccn": -2.0, "ccn_trend": -0.4, "warnings": -2},
+    }
+    result = render_markdown(summary)
+    assert isinstance(result, str)
+    assert "-50" in result or "-2.0" in result
+
+
+def test_render_ci_summary_failed() -> None:
+    """render_ci_summary with regression should show failures."""
+    from scopio.diff import render_ci_summary
+
+    summary = {
+        "project": "reg-proj",
+        "base": {"timestamp": "old", "branch": "main", "commit_hash": "abc", "loc": 100, "ccn": 2.0, "warnings": 0},
+        "latest": {"timestamp": "new", "branch": "main", "commit_hash": "def", "loc": 100, "ccn": 5.0, "warnings": 0},
+        "delta": {"loc": 0, "loc_trend": 0.0, "ccn": 3.0, "ccn_trend": 1.5, "warnings": 0},
+    }
+    result = render_ci_summary(summary)
+    assert isinstance(result, str)
+    assert "reg-proj" in result
+    assert "failed" in result.lower() or "CCN" in result
+
+
+def test_render_ci_summary_passed() -> None:
+    """render_ci_summary with improvement should show passed."""
+    from scopio.diff import render_ci_summary
+
+    summary = {
+        "project": "ok-proj",
+        "base": {"timestamp": "old", "branch": "main", "commit_hash": "abc", "loc": 100, "ccn": 5.0, "warnings": 2},
+        "latest": {"timestamp": "new", "branch": "main", "commit_hash": "def", "loc": 100, "ccn": 3.0, "warnings": 1},
+        "delta": {"loc": 0, "loc_trend": 0.0, "ccn": -2.0, "ccn_trend": -0.4, "warnings": -1},
+    }
+    result = render_ci_summary(summary)
+    assert isinstance(result, str)
+    assert "passed" in result.lower()
+
+
+def test_render_file_markdown_empty() -> None:
+    """render_file_markdown with empty files should not crash."""
+    from scopio.diff import render_file_markdown
+
+    summary = {
+        "project": "test-proj",
+        "base": {"timestamp": "now", "branch": "main", "commit_hash": "abc", "loc": 100, "ccn": 5.0, "warnings": 2},
+        "latest": {"timestamp": "now", "branch": "main", "commit_hash": "def", "loc": 100, "ccn": 5.0, "warnings": 2},
+        "threshold_ccn": None,
+        "files": [],
+        "summary": {
+            "total_files": 0,
+            "added_files": 0,
+            "removed_files": 0,
+            "changed_files": 0,
+            "over_threshold_files": 0,
+        },
+    }
+    result = render_file_markdown(summary)
+    assert isinstance(result, str)
+
+
+def test_render_diff_delta_all_none() -> None:
+    """_render_diff_delta with None values should not crash."""
+    from scopio.diff import render_markdown
+
+    summary = {
+        "project": "test-proj",
+        "base": {"timestamp": None, "branch": None, "commit_hash": None, "loc": 100, "ccn": 5.0, "warnings": 2},
+        "latest": {"timestamp": None, "branch": None, "commit_hash": None, "loc": 100, "ccn": 5.0, "warnings": 2},
+        "delta": {"loc": 0, "loc_trend": None, "ccn": 0.0, "ccn_trend": None, "warnings": 0},
+    }
+    result = render_markdown(summary)
+    assert isinstance(result, str)

@@ -10,6 +10,13 @@ Code metrics auditor with SQLite history, diffs and quality gates.
 pip install scopio
 ```
 
+### Requirements
+
+- Python >= 3.11
+- `lizard` >= 1.24.0 (required for CSV parsing mode)
+- `scc` >= 3.3.0 (optional, used for language/line counting)
+- `git` (optional, used for metadata)
+
 ## Development
 
 This project uses [uv](https://docs.astral.sh/uv/) as the Python toolchain.

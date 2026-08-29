@@ -103,7 +103,9 @@ def _fetch_file_metrics_by_audit_id(db_path: Path, audit_id: int) -> dict[str, d
         }
 
 
-def _compute_file_delta(path: str, base: dict[str, Any] | None, latest: dict[str, Any] | None, threshold_ccn: float | None) -> dict[str, Any]:
+def _compute_file_delta(
+    path: str, base: dict[str, Any] | None, latest: dict[str, Any] | None, threshold_ccn: float | None
+) -> dict[str, Any]:
     """Compute delta metrics for a single file across two audits."""
     item: dict[str, Any] = {
         "path": path,
@@ -138,10 +140,7 @@ def _summarize_file_changes(files: list[dict[str, Any]]) -> dict[str, int]:
     """Compute summary statistics from a list of file diffs."""
     added = [f for f in files if f["added"]]
     removed = [f for f in files if f["removed"]]
-    changed = [
-        f for f in files
-        if not f["added"] and not f["removed"] and f.get("ccn_delta") not in (None, 0)
-    ]
+    changed = [f for f in files if not f["added"] and not f["removed"] and f.get("ccn_delta") not in (None, 0)]
     over = [f for f in files if f.get("over_threshold")]
     return {
         "total_files": len(files),
@@ -174,8 +173,7 @@ def project_file_diff(db_path: Path, project: str, threshold_ccn: float | None =
 
     all_paths = sorted(set(base_files) | set(latest_files))
     files = [
-        _compute_file_delta(path, base_files.get(path), latest_files.get(path), threshold_ccn)
-        for path in all_paths
+        _compute_file_delta(path, base_files.get(path), latest_files.get(path), threshold_ccn) for path in all_paths
     ]
 
     return {
