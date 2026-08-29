@@ -16,7 +16,7 @@ from typing import Any, ClassVar
 
 from .db import open_db
 from .formats import export_outputs
-from .types import AuditResult, GitInfo, LizardSummary, SccRecord
+from .types import AuditResult, GitInfo, LizardFile, LizardSummary, SccRecord
 
 
 class ConfigError(Exception):
@@ -112,6 +112,32 @@ def _run_tool_version(cmd: str) -> str:
         return f"ERROR:{exc}"
 
 
+EXPECTED_VERSIONS = {
+    "scc": (3, 3, "scc >=3.3,<4.0"),
+    "lizard": (1, 24, "lizard >=1.24,<1.25"),
+}
+
+
+def _validate_tool_versions(versions: dict[str, str]) -> list[str]:
+    """Check detected tool versions against expected major.minor range.
+    Returns a list of warning messages (empty = all good).
+    """
+    warnings: list[str] = []
+    for cmd, (expected_major, expected_minor, hint) in EXPECTED_VERSIONS.items():
+        raw = versions.get(cmd, "")
+        if not raw:
+            warnings.append(f"{cmd}: not found, expected {hint}")
+            continue
+        match = re.search(r"(\d+)\.(\d+)", raw)
+        if not match:
+            warnings.append(f"{cmd}: version '{raw}' unparseable, expected {hint}")
+            continue
+        major, minor = int(match.group(1)), int(match.group(2))
+        if major != expected_major or minor != expected_minor:
+            warnings.append(f"{cmd}: version {major}.{minor} detected, expected {hint}")
+    return warnings
+
+
 def _tool_versions() -> dict[str, str]:
     versions: dict[str, str] = {}
     for cmd in ["scc", "lizard"]:
@@ -119,6 +145,71 @@ def _tool_versions() -> dict[str, str]:
         if version:
             versions[cmd] = version
     return versions
+
+
+def _parse_lizard_csv(output: str) -> LizardSummary:
+    """Parse lizard --csv output into LizardSummary.
+
+    CSV format (one line per function):
+    NLOC,CCN,token,PARAM,length,location,file,function,function_long,start_line,end_line
+    """
+    import csv as csv_mod
+    import io
+
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    if not lines:
+        return {"nloc": 0, "ccn": 0.0, "warnings": 0, "files": []}
+
+    reader = csv_mod.reader(io.StringIO(output))
+    file_metrics: list[dict[str, Any]] = []
+    total_nloc = 0
+    total_ccn = 0.0
+    warning_count = 0
+
+    for row in reader:
+        if len(row) < 7:
+            continue
+        try:
+            nloc = int(row[0])
+            ccn = float(row[1])
+            file_path = row[6]
+        except (IndexError, ValueError):
+            continue
+
+        total_nloc += nloc
+        total_ccn += ccn
+        file_metrics.append(
+            {
+                "path": str(file_path),
+                "nloc": nloc,
+                "ccn": ccn,
+                "warnings": 0,
+            }
+        )
+
+    total_ccn = round(total_ccn / len(file_metrics), 1) if file_metrics else 0.0
+
+    if file_metrics and total_ccn == 0.0:
+        logger = logging.getLogger("scopio")
+        logger.warning(
+            json.dumps(
+                {
+                    "event": "lizard_parse_suspicious",
+                    "files_count": len(file_metrics),
+                    "total_nloc": total_nloc,
+                    "ccn": total_ccn,
+                }
+            )
+        )
+
+    from typing import cast
+
+    return {
+        "nloc": total_nloc,
+        "ccn": total_ccn,
+        "warnings": warning_count,
+        "files": [cast(LizardFile, fm) for fm in file_metrics],
+    }
 
 
 def _run_scc(proj_path: Path, excludes: list[str]) -> list[SccRecord]:
@@ -208,13 +299,11 @@ def _parse_lizard_output(output: str) -> dict[str, Any]:
 
 
 def _run_lizard(proj_path: Path, extra_excludes: list[str]) -> LizardSummary:
-    from typing import cast
-
-    cmd = ["lizard", str(proj_path), *extra_excludes]
+    cmd = ["lizard", "--csv", str(proj_path), *extra_excludes]
     res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
     if res.returncode != 0:
         return {"nloc": 0, "ccn": 0.0, "warnings": 0, "files": []}
-    return cast(LizardSummary, _parse_lizard_output(res.stdout))
+    return _parse_lizard_csv(res.stdout)
 
 
 def _language_from_scc(scc_data: list[SccRecord], ignored: set[str]) -> str:
@@ -637,6 +726,12 @@ class MetricsAuditor:
     def run(self, verbose: bool = False, quiet: bool = False, incremental: bool = False) -> dict[str, Any]:
         logger = _setup_logging(verbose=verbose, quiet=quiet)
         targets = self.config.get("discovery", {}).get("projects", [])
+
+        # Validate tool versions at start of each run
+        current_versions = _tool_versions()
+        version_warnings = _validate_tool_versions(current_versions)
+        for w in version_warnings:
+            logger.warning(json.dumps({"event": "tool_version_diverge", "msg": w}))
         results: list[AuditResult] = []
         failures: list[dict[str, Any]] = []
 

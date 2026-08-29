@@ -11,7 +11,7 @@ from scopio.audit import (
     MetricsAuditor,
     _git_info,
     _language_from_scc,
-    _parse_lizard_output,
+    _parse_lizard_csv,
     _run_lizard,
     _run_scc,
 )
@@ -20,49 +20,34 @@ from scopio.audit import (
 
 # Realistic lizard output. Note: the parser counts the "Total" line as a file
 # and uses parts[2] (tokens) for initial CCN — pre-existing quirks.
-LIZARD_COMPLETE = """
-==============================================================
-  NLOC    CCN   token  PARAM  START  END   LOC   METHOD
-==============================================================
-    10      5     30      2      1    11    10   foo
-     5      2     15      1     12    16     5   bar
-==============================================================
-    15      7     45      3     13    27    15   <<<== Total
+LIZARD_CSV = """10,5,30,2,1,foo@10@scopio/foo.py,scopio/foo.py,foo,foo(x),1,10
+5,2,15,1,1,bar@5@scopio/bar.py,scopio/bar.py,bar,bar(y),12,16
 """
 
-LIZARD_EMPTY = """
-==============================================================
-  NLOC    CCN   token  PARAM  START  END   LOC   METHOD
-==============================================================
-==============================================================
-     0      0      0      0     0     0     0   <<<== Total
+LIZARD_CSV_EMPTY = """
 """
 
-LIZARD_MALFORMED = ""
+LIZARD_CSV_MALFORMED = "not,csv,at,all"
 
 
-def test_parse_lizard_complete() -> None:
-    result = _parse_lizard_output(LIZARD_COMPLETE)
-    assert result["nloc"] == 15  # from total line parts[0]
-    # CCN: parsed from the last line parts[1]=7, then file loop sums cols[1]
-    # and divides by file count (2 files, Total line filtered out). (5+2)/2 = 3.5
-    assert result["ccn"] == 3.5
-    # warnings: file loop sums cols[5]: foo(11)+bar(16) = 27
-    assert result["warnings"] == 27
+def test_parse_lizard_csv_complete() -> None:
+    result = _parse_lizard_csv(LIZARD_CSV)
+    assert result["nloc"] == 15  # 10 + 5
+    assert result["ccn"] == 3.5  # (5+2)/2
+    assert result["warnings"] == 0  # lizard CSV has no warnings per function
     assert len(result["files"]) == 2
 
 
-def test_parse_lizard_empty() -> None:
-    result = _parse_lizard_output(LIZARD_EMPTY)
+def test_parse_lizard_csv_empty() -> None:
+    result = _parse_lizard_csv(LIZARD_CSV_EMPTY)
     assert result["nloc"] == 0
     assert result["ccn"] == 0.0
     assert result["warnings"] == 0
-    # The "Total" line is now filtered (<<<== check), so files = []
     assert result["files"] == []
 
 
-def test_parse_lizard_malformed() -> None:
-    result = _parse_lizard_output(LIZARD_MALFORMED)
+def test_parse_lizard_csv_malformed() -> None:
+    result = _parse_lizard_csv(LIZARD_CSV_MALFORMED)
     assert result["nloc"] == 0
     assert result["ccn"] == 0.0
     assert result["warnings"] == 0
@@ -132,7 +117,7 @@ def test_run_scc_includes_exclude_dirs(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_run_lizard_success(monkeypatch: pytest.MonkeyPatch) -> None:
     mock = MagicMock()
     mock.returncode = 0
-    mock.stdout = LIZARD_COMPLETE
+    mock.stdout = LIZARD_CSV
     monkeypatch.setattr("subprocess.run", lambda cmd, **kw: mock)
 
     result = _run_lizard(Path("/tmp"), [])
@@ -583,3 +568,40 @@ def test_clean_keeps_correct_rows(tmp_path: Path) -> None:
         assert history == 2, f"Expected 2 history rows, got {history}"
         file_metrics = conn.execute("SELECT COUNT(*) FROM file_metrics").fetchone()[0]
         assert file_metrics == 2, f"Expected 2 file_metrics rows, got {file_metrics}"
+
+
+# ─── Version validation ──────────────────────────────────────────────────
+
+
+def test_validate_tool_versions_all_good() -> None:
+    from scopio.audit import _validate_tool_versions
+
+    versions = {"scc": "scc version 3.3.0", "lizard": "lizard 1.24.0"}
+    warnings = _validate_tool_versions(versions)
+    assert len(warnings) == 0, f"Expected no warnings, got: {warnings}"
+
+
+def test_validate_tool_versions_diverge() -> None:
+    from scopio.audit import _validate_tool_versions
+
+    versions = {"scc": "scc version 3.7.0", "lizard": "lizard 1.23.0"}
+    warnings = _validate_tool_versions(versions)
+    assert len(warnings) == 2, f"Expected 2 warnings, got: {warnings}"
+    assert any("scc" in w for w in warnings)
+    assert any("lizard" in w for w in warnings)
+
+
+def test_validate_tool_versions_missing() -> None:
+    from scopio.audit import _validate_tool_versions
+
+    warnings = _validate_tool_versions({})
+    assert len(warnings) == 2
+    assert all("not found" in w for w in warnings)
+
+
+def test_validate_tool_versions_unparseable() -> None:
+    from scopio.audit import _validate_tool_versions
+
+    warnings = _validate_tool_versions({"scc": "garbage", "lizard": "1.24.0"})
+    assert len(warnings) == 1
+    assert "unparseable" in warnings[0]
