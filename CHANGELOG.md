@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-08-29
+
+### Added
+- Per-function complexity gate (`max_function_ccn`) that catches worst-function outliers the average CCN gate misses.
+- `ccn_max` metric now tracked in the database, history, exports, `report`, and diff/CI summaries.
+- `--base {previous,first}` option on `diff` and `diff-report`; the default is now the previous audit.
+
+### Changed
+- `diff`/`ci` now compare the previous audit against the current one (was first vs last).
+- `file_metrics` in `diff-report` are aggregated per file (NLOC sum, CCN max).
+- CI rules are threshold-aware (`max_ccn_trend_increase` and `[ci] max_loc_trend_increase`) and no longer fail on LOC decrease or a redundant CCN-regression rule.
+
+### Fixed
+- `metrics_history` ALTER migrations now target the correct table (was hardcoded to `metrics`).
+
+### Removed
+- Dead `_parse_lizard_output` parser (superseded by the CSV parser).
+
 ## [0.2.2] - 2026-08-29
 
 ### Changed
