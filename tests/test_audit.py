@@ -586,11 +586,19 @@ def test_validate_tool_versions_all_good() -> None:
 def test_validate_tool_versions_diverge() -> None:
     from scopio.audit import _validate_tool_versions
 
-    versions = {"scc": "scc version 3.7.0", "lizard": "lizard 1.23.0"}
+    versions = {"scc": "scc version 4.0.0", "lizard": "lizard 1.23.0"}
     warnings = _validate_tool_versions(versions)
     assert len(warnings) == 2, f"Expected 2 warnings, got: {warnings}"
     assert any("scc" in w for w in warnings)
     assert any("lizard" in w for w in warnings)
+
+
+def test_validate_tool_versions_in_range() -> None:
+    from scopio.audit import _validate_tool_versions
+
+    versions = {"scc": "scc version 3.6.0", "lizard": "lizard 1.24.5"}
+    warnings = _validate_tool_versions(versions)
+    assert warnings == [], f"Expected no warnings, got: {warnings}"
 
 
 def test_validate_tool_versions_missing() -> None:

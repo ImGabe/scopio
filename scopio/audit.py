@@ -12,7 +12,7 @@ import tomllib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, TypedDict
 
 from .db import open_db
 from .formats import export_outputs
@@ -112,18 +112,26 @@ def _run_tool_version(cmd: str) -> str:
         return f"ERROR:{exc}"
 
 
-EXPECTED_VERSIONS = {
-    "scc": (3, 3, "scc >=3.3,<4.0"),
-    "lizard": (1, 24, "lizard >=1.24,<1.25"),
+class _ToolVersionSpec(TypedDict):
+    min: tuple[int, int]
+    max: tuple[int, int]
+    hint: str
+
+
+EXPECTED_VERSIONS: dict[str, _ToolVersionSpec] = {
+    "scc": {"min": (3, 3), "max": (4, 0), "hint": "scc >=3.3,<4.0"},
+    "lizard": {"min": (1, 24), "max": (1, 25), "hint": "lizard >=1.24,<1.25"},
 }
 
 
 def _validate_tool_versions(versions: dict[str, str]) -> list[str]:
-    """Check detected tool versions against expected major.minor range.
+    """Check detected tool versions against the expected range.
+
     Returns a list of warning messages (empty = all good).
     """
     warnings: list[str] = []
-    for cmd, (expected_major, expected_minor, hint) in EXPECTED_VERSIONS.items():
+    for cmd, spec in EXPECTED_VERSIONS.items():
+        hint = spec["hint"]
         raw = versions.get(cmd, "")
         if not raw:
             warnings.append(f"{cmd}: not found, expected {hint}")
@@ -132,9 +140,9 @@ def _validate_tool_versions(versions: dict[str, str]) -> list[str]:
         if not match:
             warnings.append(f"{cmd}: version '{raw}' unparseable, expected {hint}")
             continue
-        major, minor = int(match.group(1)), int(match.group(2))
-        if major != expected_major or minor != expected_minor:
-            warnings.append(f"{cmd}: version {major}.{minor} detected, expected {hint}")
+        version = (int(match.group(1)), int(match.group(2)))
+        if not (spec["min"] <= version < spec["max"]):
+            warnings.append(f"{cmd}: version {version[0]}.{version[1]} detected, expected {hint}")
     return warnings
 
 
