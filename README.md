@@ -105,16 +105,20 @@ minified_files = ["*.min.js", "*.min.css"]
 ignored_langs = ["JSON", "Markdown", "TOML"]
 
 [quality_gates]
-max_ccn = 10.0
+max_ccn = 10.0            # average CCN per function
+max_function_ccn = 15.0   # worst function complexity (disabled if omitted)
 max_warnings = 10
 max_ccn_trend_increase = 0.2
 trend_sensitive_projects = []
 
 [quality_gates.per_project]
-# "my-project" = { max_ccn = 12.0, max_warnings = 15 }
+# "my-project" = { max_ccn = 12.0, max_warnings = 15, max_function_ccn = 20.0 }
 
 [quality_gates.per_language]
 # Python = { max_ccn = 12.0, max_warnings = 20 }
+
+[ci]
+max_loc_trend_increase = 0.0  # fail if LOC grows above this ratio (0.0 = any growth)
 ```
 
 ## Audit behavior
@@ -123,7 +127,17 @@ trend_sensitive_projects = []
 - **Same commit, same branch**: metrics are **upserted** (updated) and `runs_count` is incremented. This avoids data staleness when re-running on the same commit (e.g. after changing `.scopio.toml` filters).
 - **Different commit**: a new row is created with `runs_count = 1`.
 - The `runs_count` field is exposed in `report`, CSV, JSON and Markdown exports.
-- Quality gates and diff comparisons use the last audited run for each project. Trend gate compares against the **previous** historical audit (before the current one).
+- Diff and CI comparisons compare the **previous** audit against the current one by default (use `--base first` to compare against the very first audit).
+- Quality gates use the current audit's values; the trend gate compares against the **previous** historical audit.
+
+## What the numbers mean
+
+- **LOC**: source lines of code counted by `scc`.
+- **NLOC**: logical lines of code counted by `lizard`. LOC and NLOC are intentionally different metrics (different counting methodologies).
+- **CCN (avg)**: cyclomatic complexity averaged over all functions. Averages hide outliers.
+- **ccn_max / `max_function_ccn`**: cyclomatic complexity of the **worst** single function — this is what the per-function quality gate checks.
+- **warnings**: currently always `0` — the `lizard --csv` format does not emit warnings. Language-specific warning adapters (clippy, eslint, ruff) are planned.
+- **file_metrics**: stored per-function in the database; the granular `diff-report` aggregates them per file (NLOC sum, CCN max).
 
 ## GitHub Actions
 
