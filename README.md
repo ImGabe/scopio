@@ -36,6 +36,9 @@ scopio --config scopio.toml run
 
 All output artifacts (database, JSON, CSV, Markdown) are stored in the `.scopio/` directory by default. Use `--output-dir` to override.
 
+All output artifacts (database, JSON, CSV, Markdown) are stored in the `.scopio/` directory by default. Use `--output-dir` to override.
+
+If `scc` or `lizard` versions differ from the expected range, a non-blocking `tool_version_diverge` warning is emitted in the logs.
 ## Semantic Versioning
 
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).

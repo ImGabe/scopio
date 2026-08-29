@@ -5,70 +5,55 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-### Changed
-- **Output artifacts moved to dedicated `.scopio/` directory**: database, JSON, CSV, Markdown files now default to `.scopio/` instead of CWD (`--output-dir` override still works).\n- `archive` command now resolves default DB path and output directory from the shared context, respecting `--output-dir` consistently.\n- `.gitignore` updated: `.scopio/` replaces individual `scopio.db`, `scopio.json`, `scopio.csv`, `scopio.md` entries.\n\n
-- **Fixed bug in `_parse_lizard_output`**: CCN now reads from column 1 (CCN value) instead of column 2 (token count) and the summary/Total lines are filtered out so they don't inflate file counts and averages. This fixes quality gates reporting incorrectly.
-- `mypy` check added to CI workflow (`tests.yml`).
-- `pytest-cov` added to dev dependency group.
-- `scopio archive` now respects `--output-dir` from the parent context.
-- `observability` dict no longer duplicated between `audit.py` and `cli.py`.
-- WAL journal mode enabled for SQLite.
-- `.pre-commit-config.yaml` added with ruff, ruff-format, mypy and uv-lock hooks.
-- `scopio.toml` added to `.gitignore`.
-- Git repository initialized.
-
-
-- Migrated toolchain from setuptools/pip to **uv** (uv lock, uv sync, uv build).
-- Build backend changed to **hatchling** for faster builds.
-- `lizard` is now a declared project dependency (via PyPI) instead of a manual install.
-- Development dependencies moved to `[dependency-groups]` (PEP 735) — `dev` group with pytest and ruff.
-- Removed deprecated `tomli` fallback (Python ≥ 3.11 has `tomllib` built-in).
-- CI workflows updated to use `astral-sh/setup-uv@v10` with caching.
-- Dockerfile now uses `ghcr.io/astral-sh/uv:python3.11-bookworm-slim` with uv sync.
-- Added `.gitignore`, `.python-version`, `uv.lock` (committed for reproducible builds).
-- Code linting/formatting with **ruff**.
-
-### Fixed
-- `diff` and `diff-report` commands now registered in CLI (B1).
-- `scopio archive` no longer crashes with `NameError: csv` (B2).
-- Trend gate now evaluates against the **previous** audit instead of the just-saved one (B3).
-- `metrics_history.timestamp` now correctly defaults to `CURRENT_TIMESTAMP` (B4).
-- Legacy database migration no longer drops all data on open (`DROP TABLE metrics` replaced with safe ALTER TABLE, B5).
-- `scopio clean` now also prunes orphaned rows in `file_metrics` and `metrics_history` tables (B6).
-- Foreign key enforcement enabled via `PRAGMA foreign_keys = ON` on every database connection.
-- Portuguese output strings in `diff.py` replaced with English for consistency (`Arquivos monitorados`, `Acima do threshold`, `Arquivos alterados`).
-- Logging formatter replaced with `_JsonFormatter` wrapper that serialises arbitrary log messages to valid JSON.
-- Removed always-dead fields (`ccn_max: 0`, `coverage: None`, `duplication: None`, `outdated_dependencies: None`) from audit result dict and INSERT statement.
-- Dead columns (`ccn_max`, `coverage`, `duplication`, `outdated_dependencies`) left in schema for backward compatibility but no longer populated.
-- Unused `dirs` loop variable in `_filter_incremental` renamed; missing `Any`/`render_file_markdown` imports fixed.
-
-
-### Changed
-- **TypedDicts adopted throughout**: `scopio/types.py` imported and used in all modules — `audit.py`, `diff.py`, `cli.py`, `formats.py` now use typed `AuditResult`, `LizardSummary`, `SccRecord`, `GitInfo`, `DiffSummary` signatures instead of bare `dict[str, Any]`.
-- **`export_outputs` decomposed** into `_enrich_results`, `_export_json`, `_export_csv`, `_export_markdown` helpers (reduced CCN from 14 to 3, eliminated duplicate `tools_str` logic).
-- **`_init_db` made declarative**: If-chain replaced with `_MIGRATIONS` list of `(version, sql)` tuples and a clean loop (reduced from 119 to ~40 NLOC).
-- **`_save_results` decomposed** into `_upsert_metrics_row`, `_log_metrics_history`, `_save_file_metrics` helpers (reduced from 79 to ~15 NLOC).
-- **Trend gate now queries `metrics_history`** (append-only) instead of `metrics` (upsert) — B3 fix is more robust and survives future refactors.
-- **Coverage gate in CI**: `pytest --cov=scopio --cov-fail-under=60` added to `tests.yml`.
-- **README**: Added section documenting `runs_count` and upsert semantics.
-- **Bug fix**: `_save_results` had hardcoded `"warnings": 0` for file metrics — now uses `file_metric.get("warnings", 0)`.
-- **Bug fix**: Migration loop in `_init_db` had `version = 7` outside the `if` block, preventing all migrations after v1 from running.
+## [0.2.0] - 2026-08-29
 
 ### Added
-- CLI tests with `click.testing.CliRunner` covering all 8 commands (`tests/test_cli.py`, 7 tests).
-- Field test for trend gate logic against an inserted-prior-row scenario (`test_trend_gate_detects_regression`).
-- **mypy** added to dev dependency group with basic configuration (`[tool.mypy]` in `pyproject.toml`).
-- **Upsert + runs_count**: `INSERT ... ON CONFLICT DO UPDATE` replaces `INSERT OR IGNORE` — re-auditing the same (project, branch, commit_hash) updates metrics and increments `runs_count`, avoiding silent data staleness (Option D, v7 migration).
-- `runs_count` exposed in `scopio report`, CSV, JSON and Markdown exports.
-- Added `tests/test_audit.py` with 22 tests covering: `_parse_lizard_output`, `_run_scc`/`_run_lizard` mocking, `_git_info`, `_audit_project` integration, quality gates, and upsert re-run behavior.
-- Migration safety: all `ALTER TABLE` operations now check column existence via `PRAGMA table_info` before executing (eliminating silent `except: pass` in v2/v4 migrations).
-- Migrations v5/v6 `CREATE TABLE IF NOT EXISTS` blocks no longer wrapped in silent try/except.
-- `_fs_sharp_fallback` now logs structured warnings instead of silently swallowing errors; `next(iter(...), None)` avoids `StopIteration`.
-- `PRAGMA foreign_keys = ON` enforced on every database connection.
-- `scopio clean` now cascades to `file_metrics` and `metrics_history` before deleting `metrics` rows.
-- Strings in `diff.py` output homogenised to English.
+- **Toolchain migrated to uv**: `uv.lock`, `.python-version`, hatchling build backend, `uv sync`/`uv build`/`uv publish` — replaces setuptools/pip.
+- **TypedDicts throughout**: `scopio/types.py` with `AuditResult`, `LizardSummary`, `SccRecord`, `GitInfo`, `DiffSummary` — adopted in all modules.
+- **Upsert + `runs_count`**: `INSERT ... ON CONFLICT DO UPDATE` replaces `INSERT OR IGNORE` — re-auditing the same (project, branch, commit_hash) updates metrics and increments `runs_count` (v7 migration).
+- **mypy strict** with `disallow_untyped_defs = true` — 0 issues in 7 source files.
+- **ruff**: lint + format, integrated via CI and pre-commit.
+- **pytest-cov** with coverage gate (70%).
+- **CLI tests**: `tests/test_cli.py` with `CliRunner` covering all 8 commands.
+- **Audit tests**: `tests/test_audit.py` with 24 tests covering `_parse_lizard_csv`, `_run_scc`/`_run_lizard` mocking, `_git_info`, `_audit_project` integration, quality gates, upsert, path traversal, clean cascading, and tool version validation.
+- **Diff/CI tests**: `tests/test_diff_commands.py` with 6 tests covering `diff`, `diff-report`, `ci` with seeded multi-audit history.
+- **Pre-commit hooks**: ruff, ruff-format, mypy, uv-lock.
+- **`.pre-commit-config.yaml`**, `.gitignore`, `.python-version` files.
+- **`tool_version_diverge` event**: warns when `scc`/`lizard` versions differ from expected range (visible in logs, non-blocking).
+
+### Changed
+- **Parser migrated to lizard --csv**: replaces fragile textual `_parse_lizard_output` with stable CSV parser (`_parse_lizard_csv`). Sanity check warns if CCN is 0 despite files being parsed.
+- **`_init_db` made declarative**: if-chain replaced with `_MIGRATIONS` list of `(version, sql)` tuples and clean loop.
+- **`_save_results` decomposed** into `_upsert_metrics_row`, `_log_metrics_history`, `_save_file_metrics`.
+- **`export_outputs` decomposed** into `_enrich_results`, `_export_json`, `_export_csv`, `_export_markdown`.
+- **Trend gate now queries `metrics_history`** (append-only) instead of `metrics` (upsert) — more robust.
+- **Output artifacts moved to `.scopio/`**: database, JSON, CSV, Markdown files default to `.scopio/` instead of CWD (`--output-dir` override still works).
+- **`scopio archive`** now resolves DB path and output directory from shared context.
+- **`ci --fail-on-regression`** respects `max_ccn_trend_increase` from config (aligned with trend gate).
+- **`observability` dict** no longer duplicated between `audit.py` and `cli.py`.
+- **`_run_cmd`** returns "" + log instead of `"ERROR:{exc}"` that corrupted data.
+- **`_fs_sharp_fallback`** logs structured warnings instead of swallowing errors.
+- **All migration ALTER TABLEs** check column existence via `PRAGMA table_info` first.
+- **Strings in `diff.py`** homogenised to English.
+- **WAL journal mode** enabled for SQLite.
+- **`init` sample** now includes all `quality_gates` options (`max_ccn_trend_increase`, `trend_sensitive_projects`, `per_project`, `per_language`).
+- **`lizard`** pinned to `>=1.24,<1.25` in `pyproject.toml`.
+- **`scc` v3.3.0** pinned in Dockerfile (expected runtime version).
+
+### Fixed
+- `diff` and `diff-report` commands not registered in CLI (B1).
+- `scopio archive` `NameError: csv` (B2).
+- Trend gate evaluating against just-saved audit instead of previous (B3).
+- `metrics_history.timestamp` always NULL (B4).
+- Legacy database DROP TABLE on open (B5).
+- `scopio clean` not cascading to child tables (B6).
+- `_save_results` hardcoded `"warnings": 0` for file metrics.
+- Migration loop `version = 7` outside `if` block (prevented all migrations after v1).
+- `scopio clean` missing bind parameters (crash on clean).
+- Path traversal unrestricted in `_audit_project`.
+- `FileNotFoundError`/`TOMLDecodeError` leaking raw tracebacks (now `ConfigError`).
+- Unused imports and loop variables flagged by ruff.
+
 ## [0.1.0] - 2026-08-27
 
 ### Added
