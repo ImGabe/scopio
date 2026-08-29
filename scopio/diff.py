@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -74,7 +75,10 @@ def project_diff(db_path: Path, project: str) -> DiffSummary:
     }
 
 
-def project_file_diff(db_path: Path, project: str, threshold_ccn: float | None = None) -> dict[str, Any]:
+def _fetch_project_audit_rows(db_path: Path, project: str) -> list[sqlite3.Row]:
+    """Fetch audit rows and file_metrics for a project.
+    Returns (audit_rows, latest_file_rows).
+    """
     with open_db(db_path) as conn:
         rows = conn.execute(
             """
@@ -85,94 +89,102 @@ def project_file_diff(db_path: Path, project: str, threshold_ccn: float | None =
             """,
             (project,),
         ).fetchall()
+    return rows
+
+
+def _fetch_file_metrics_by_audit_id(db_path: Path, audit_id: int) -> dict[str, dict[str, Any]]:
+    """Return {path: row_dict} for a given audit_id."""
+    with open_db(db_path) as conn:
+        return {
+            row["path"]: dict(row)
+            for row in conn.execute(
+                "SELECT path, nloc, ccn, warnings FROM file_metrics WHERE audit_id = ?", (audit_id,)
+            ).fetchall()
+        }
+
+
+def _compute_file_delta(path: str, base: dict[str, Any] | None, latest: dict[str, Any] | None, threshold_ccn: float | None) -> dict[str, Any]:
+    """Compute delta metrics for a single file across two audits."""
+    item: dict[str, Any] = {
+        "path": path,
+        "added": base is None and latest is not None,
+        "removed": base is not None and latest is None,
+    }
+
+    if base and latest:
+        item["nloc_delta"] = _safe_num(latest["nloc"]) - _safe_num(base["nloc"])
+        item["ccn_delta"] = _safe_num(latest["ccn"]) - _safe_num(base["ccn"])
+        item["warnings_delta"] = _safe_num(latest["warnings"]) - _safe_num(base["warnings"])
+        item["ccn"] = latest["ccn"]
+        item["over_threshold"] = threshold_ccn is not None and _safe_num(latest["ccn"]) > threshold_ccn
+    elif latest:
+        item["nloc_delta"] = latest["nloc"]
+        item["ccn_delta"] = latest["ccn"]
+        item["warnings_delta"] = latest["warnings"]
+        item["ccn"] = latest["ccn"]
+        item["over_threshold"] = threshold_ccn is not None and _safe_num(latest["ccn"]) > threshold_ccn
+    else:
+        assert base is not None
+        item["nloc_delta"] = -_safe_num(base["nloc"])
+        item["ccn_delta"] = -_safe_num(base["ccn"])
+        item["warnings_delta"] = -_safe_num(base["warnings"])
+        item["ccn"] = base["ccn"]
+        item["over_threshold"] = threshold_ccn is not None and _safe_num(base["ccn"]) > threshold_ccn
+
+    return item
+
+
+def _summarize_file_changes(files: list[dict[str, Any]]) -> dict[str, int]:
+    """Compute summary statistics from a list of file diffs."""
+    added = [f for f in files if f["added"]]
+    removed = [f for f in files if f["removed"]]
+    changed = [
+        f for f in files
+        if not f["added"] and not f["removed"] and f.get("ccn_delta") not in (None, 0)
+    ]
+    over = [f for f in files if f.get("over_threshold")]
+    return {
+        "total_files": len(files),
+        "added_files": len(added),
+        "removed_files": len(removed),
+        "changed_files": len(changed),
+        "over_threshold_files": len(over),
+    }
+
+
+def _snapshot_meta(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "timestamp": row.get("timestamp"),
+        "branch": row.get("branch"),
+        "commit_hash": row.get("commit_hash"),
+    }
+
+
+def project_file_diff(db_path: Path, project: str, threshold_ccn: float | None = None) -> dict[str, Any]:
+    rows = _fetch_project_audit_rows(db_path, project)
 
     if len(rows) < 2:
         raise click.ClickException("Not enough history for granular diff (requires at least 2 audits).")
 
-    base_audit_id = rows[0]["audit_id"]
-    latest_audit_id = rows[-1]["audit_id"]
     base_meta = dict(rows[0])
     latest_meta = dict(rows[-1])
 
-    with open_db(db_path) as conn:
-        base_files = {
-            row["path"]: dict(row)
-            for row in conn.execute(
-                "SELECT path, nloc, ccn, warnings FROM file_metrics WHERE audit_id = ?", (base_audit_id,)
-            ).fetchall()
-        }
-        latest_files = {
-            row["path"]: dict(row)
-            for row in conn.execute(
-                "SELECT path, nloc, ccn, warnings FROM file_metrics WHERE audit_id = ?", (latest_audit_id,)
-            ).fetchall()
-        }
+    base_files = _fetch_file_metrics_by_audit_id(db_path, rows[0]["audit_id"])
+    latest_files = _fetch_file_metrics_by_audit_id(db_path, rows[-1]["audit_id"])
 
-    files = []
     all_paths = sorted(set(base_files) | set(latest_files))
-    for path in all_paths:
-        base = base_files.get(path)
-        latest = latest_files.get(path)
-        item = {
-            "path": path,
-            "base": base,
-            "latest": latest,
-            "added": base is None and latest is not None,
-            "removed": base is not None and latest is None,
-        }
-        if base and latest:
-            item["nloc_delta"] = _safe_num(latest["nloc"]) - _safe_num(base["nloc"])
-            item["ccn_delta"] = _safe_num(latest["ccn"]) - _safe_num(base["ccn"])
-            item["warnings_delta"] = _safe_num(latest["warnings"]) - _safe_num(base["warnings"])
-            item["ccn"] = latest["ccn"]
-            item["over_threshold"] = threshold_ccn is not None and _safe_num(latest["ccn"]) > threshold_ccn
-        elif latest:
-            item["nloc_delta"] = latest["nloc"]
-            item["ccn_delta"] = latest["ccn"]
-            item["warnings_delta"] = latest["warnings"]
-            item["ccn"] = latest["ccn"]
-            item["over_threshold"] = threshold_ccn is not None and _safe_num(latest["ccn"]) > threshold_ccn
-        else:
-            assert base is not None
-            item["nloc_delta"] = -_safe_num(base["nloc"])
-            item["ccn_delta"] = -_safe_num(base["ccn"])
-            item["warnings_delta"] = -_safe_num(base["warnings"])
-            item["ccn"] = base["ccn"]
-            item["over_threshold"] = threshold_ccn is not None and _safe_num(base["ccn"]) > threshold_ccn
-
-        files.append(item)
-
-    added_files = [item for item in files if item["added"]]
-    removed_files = [item for item in files if item["removed"]]
-    over_threshold = [item for item in files if item.get("over_threshold")]
+    files = [
+        _compute_file_delta(path, base_files.get(path), latest_files.get(path), threshold_ccn)
+        for path in all_paths
+    ]
 
     return {
         "project": project,
-        "base": {
-            "timestamp": base_meta.get("timestamp"),
-            "branch": base_meta.get("branch"),
-            "commit_hash": base_meta.get("commit_hash"),
-        },
-        "latest": {
-            "timestamp": latest_meta.get("timestamp"),
-            "branch": latest_meta.get("branch"),
-            "commit_hash": latest_meta.get("commit_hash"),
-        },
+        "base": _snapshot_meta(base_meta),
+        "latest": _snapshot_meta(latest_meta),
         "threshold_ccn": threshold_ccn,
         "files": files,
-        "summary": {
-            "total_files": len(files),
-            "added_files": len(added_files),
-            "removed_files": len(removed_files),
-            "changed_files": len(
-                [
-                    item
-                    for item in files
-                    if not item["added"] and not item["removed"] and item.get("ccn_delta") not in (None, 0)
-                ]
-            ),
-            "over_threshold_files": len(over_threshold),
-        },
+        "summary": _summarize_file_changes(files),
     }
 
 
@@ -266,22 +278,43 @@ def render_file_markdown(summary: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+CI_RULES: list[tuple[str, str, str]] = [
+    # (key_delta, key_message, format_string)
+    ("ccn_trend", "trend", "CCN increased by {:.2%}"),
+    ("loc_trend", "trend", "LOC increased by {:.2%}"),
+    ("warnings", "absolute", "Warnings increased from {} to {}"),
+    ("ccn", "regression", "CCN regressed from {} to {}"),
+    ("loc", "decrease", "LOC decreased from {} to {}"),
+]
+
+
 def _detect_ci_failures(summary: dict[str, Any]) -> list[str]:
+    """Check summary against CI rules and return list of failure messages."""
     base = summary["base"]
     latest = summary["latest"]
     delta = summary["delta"]
 
     failures = []
-    if delta.get("ccn_trend") is not None and delta["ccn_trend"] > 0:
-        failures.append(f"CCN increased by {delta['ccn_trend']:.2%}")
-    if delta.get("loc_trend") is not None and delta["loc_trend"] > 0:
-        failures.append(f"LOC increased by {delta['loc_trend']:.2%}")
-    if (latest.get("warnings") or 0) > (base.get("warnings") or 0):
-        failures.append(f"Warnings increased from {base.get('warnings', 0)} to {latest.get('warnings', 0)}")
-    if latest.get("ccn") is not None and (base.get("ccn") or 0) > 0 and latest["ccn"] > base["ccn"]:
-        failures.append(f"CCN regressed from {base.get('ccn', 0)} to {latest.get('ccn', 0)}")
-    if latest.get("loc") is not None and latest.get("loc") < base.get("loc", 0):
-        failures.append(f"LOC decreased from {base.get('loc', 0)} to {latest.get('loc', 0)}")
+    for key, rule_type, fmt in CI_RULES:
+        if rule_type == "trend":
+            val = delta.get(key)
+            if val is not None and val > 0:
+                failures.append(fmt.format(val))
+        elif rule_type == "absolute":
+            lv = latest.get(key) or 0
+            bv = base.get(key) or 0
+            if lv > bv:
+                failures.append(fmt.format(bv, lv))
+        elif rule_type == "regression":
+            lv = latest.get(key)
+            bv = base.get(key) or 0
+            if lv is not None and bv > 0 and lv > bv:
+                failures.append(fmt.format(bv, lv))
+        elif rule_type == "decrease":
+            lv = latest.get(key)
+            bv = base.get(key, 0)
+            if lv is not None and lv < bv:
+                failures.append(fmt.format(bv, lv))
     return failures
 
 

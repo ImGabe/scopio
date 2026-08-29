@@ -179,3 +179,148 @@ def test_ci_command_fail_on_regression(seeded_db: Path, tmp_path: Path) -> None:
     )
     assert result.exit_code == 0, f"Should pass (CCN improved): {result.output}"
     assert "regression" not in result.output.lower()
+
+
+# ─── Edge cases ────────────────────────────────────────────────────
+
+
+def test_diff_requires_two_audits(seeded_db: Path, tmp_path: Path) -> None:
+    """diff with only 1 audit should fail with clear message."""
+    from click.testing import CliRunner
+
+    from scopio.cli import cli
+    from scopio.db import open_db
+
+    # Single audit project
+    with open_db(seeded_db) as conn:
+        conn.execute(
+            "INSERT INTO metrics (project, loc, ccn, warnings, branch, commit_hash, runs_count) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("single-proj", 50, 2.0, 0, "main", "aaa001", 1),
+        )
+        aid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        conn.execute(
+            "INSERT INTO metrics_history (audit_id, project, loc, ccn, warnings) VALUES (?, ?, ?, ?, ?)",
+            (aid, "single-proj", 50, 2.0, 0),
+        )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli, ["--config", str(tmp_path / "scopio.toml"), "--output-dir", str(tmp_path), "diff", "--project", "single-proj"]
+    )
+    assert result.exit_code != 0
+    assert "Not enough history" in result.output
+
+
+def test_diff_cross_branch(seeded_db: Path, tmp_path: Path) -> None:
+    """diff between different branches should still work."""
+    from click.testing import CliRunner
+
+    from scopio.cli import cli
+    from scopio.db import open_db
+
+    with open_db(seeded_db) as conn:
+        conn.execute(
+            "INSERT INTO metrics (project, loc, ccn, warnings, branch, commit_hash, runs_count) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("multi-branch", 100, 5.0, 2, "feature/x", "fff001", 1),
+        )
+        aid1 = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        conn.execute(
+            "INSERT INTO metrics_history (audit_id, project, loc, ccn, warnings) VALUES (?, ?, ?, ?, ?)",
+            (aid1, "multi-branch", 100, 5.0, 2),
+        )
+        conn.execute(
+            "INSERT INTO metrics (project, loc, ccn, warnings, branch, commit_hash, runs_count) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("multi-branch", 120, 3.0, 1, "main", "fff002", 1),
+        )
+        aid2 = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        conn.execute(
+            "INSERT INTO metrics_history (audit_id, project, loc, ccn, warnings) VALUES (?, ?, ?, ?, ?)",
+            (aid2, "multi-branch", 120, 3.0, 1),
+        )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        ["--config", str(tmp_path / "scopio.toml"), "--output-dir", str(tmp_path), "diff", "--project", "multi-branch"],
+    )
+    assert result.exit_code == 0
+    assert "multi-branch" in result.output
+
+
+# ─── _detect_ci_failures unit tests ─────────────────────────────────
+
+
+def test_ci_failures_ccn_increased() -> None:
+    from scopio.diff import _detect_ci_failures
+
+    summary = {
+        "base": {"ccn": 1.0, "loc": 100, "warnings": 0},
+        "latest": {"ccn": 5.0, "loc": 100, "warnings": 0},
+        "delta": {"ccn_trend": 4.0, "loc_trend": 0.0},
+    }
+    failures = _detect_ci_failures(summary)
+    assert any("CCN increased" in f for f in failures)
+    assert any("LOC increased" not in f for f in failures)
+
+
+def test_ci_failures_loc_increased() -> None:
+    from scopio.diff import _detect_ci_failures
+
+    summary = {
+        "base": {"ccn": 1.0, "loc": 100, "warnings": 0},
+        "latest": {"ccn": 1.0, "loc": 200, "warnings": 0},
+        "delta": {"ccn_trend": 0.0, "loc_trend": 1.0},
+    }
+    failures = _detect_ci_failures(summary)
+    assert any("LOC increased" in f for f in failures)
+
+
+def test_ci_failures_warnings_increased() -> None:
+    from scopio.diff import _detect_ci_failures
+
+    summary = {
+        "base": {"ccn": 1.0, "loc": 100, "warnings": 2},
+        "latest": {"ccn": 1.0, "loc": 100, "warnings": 5},
+        "delta": {"ccn_trend": 0.0, "loc_trend": 0.0},
+    }
+    failures = _detect_ci_failures(summary)
+    assert any("Warnings increased" in f for f in failures)
+
+
+def test_ci_failures_ccn_regressed() -> None:
+    from scopio.diff import _detect_ci_failures
+
+    summary = {
+        "base": {"ccn": 3.0, "loc": 100, "warnings": 0},
+        "latest": {"ccn": 5.0, "loc": 100, "warnings": 0},
+        "delta": {"ccn_trend": 0.67, "loc_trend": 0.0},
+    }
+    failures = _detect_ci_failures(summary)
+    assert any("CCN regressed" in f for f in failures)
+
+
+def test_ci_failures_loc_decreased() -> None:
+    from scopio.diff import _detect_ci_failures
+
+    summary = {
+        "base": {"ccn": 1.0, "loc": 200, "warnings": 0},
+        "latest": {"ccn": 1.0, "loc": 100, "warnings": 0},
+        "delta": {"ccn_trend": 0.0, "loc_trend": -0.5},
+    }
+    failures = _detect_ci_failures(summary)
+    assert any("LOC decreased" in f for f in failures)
+
+
+def test_ci_failures_all_clear() -> None:
+    from scopio.diff import _detect_ci_failures
+
+    summary = {
+        "base": {"ccn": 5.0, "loc": 100, "warnings": 2},
+        "latest": {"ccn": 3.0, "loc": 100, "warnings": 1},
+        "delta": {"ccn_trend": -0.4, "loc_trend": 0.0},
+    }
+    failures = _detect_ci_failures(summary)
+    assert len(failures) == 0
