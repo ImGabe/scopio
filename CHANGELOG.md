@@ -1,3 +1,18 @@
+## [0.2.1] - 2026-08-29
+
+### Added
+- Testes parametrizados para CI_RULES (14 testes estruturais + 10 parametrizados).
+- Documentação de requisito de lizard >= 1.24.0 no README.
+- Relatório do spike de dependências nativas (SPIKE_REPORT.md) — conclusão: não viável.
+- Testes de renderização para markdown, CI summary e file-level markdown.
+- Testes de cobertura para archive (json, parquet), clean (sem db), e filtro incremental.
+
+### Changed
+- Otimização de `_filter_incremental`: substituído `os.walk` por `Path.rglob` com early-exit (interrompe varredura ao primeiro arquivo recente).
+- Simplificação do comando `clean`: agora usa subquery correlacionada para manter as últimas N auditorias **por projeto** (era global).
+- Gate de cobertura global elevado para 80%.
+- Gate de cobertura de `diff.py` elevado para 75%.
+
 # Changelog
 
 All notable changes to this project will be documented in this file.
