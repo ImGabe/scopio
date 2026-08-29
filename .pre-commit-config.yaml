@@ -15,3 +15,8 @@ repos:
       - id: mypy
         language_version: python3.11
         args: ["--config-file", "pyproject.toml"]
+  - repo: https://github.com/commitizen-tools/commitizen
+    rev: v4.18.0
+    hooks:
+      - id: commitizen
+        stages: [commit-msg]
