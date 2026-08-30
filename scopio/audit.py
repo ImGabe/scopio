@@ -276,6 +276,51 @@ def _parse_gitignore(gitignore_path: Path) -> tuple[list[str], list[str]]:
     return scc_ex, lizard_ex
 
 
+def _collect_ingest_sources(proj_path: Path, sources: list[Any]) -> tuple[list[Any], int, int, list[Any]]:
+    ingest_results: list[Any] = []
+    ingest_errors = 0
+    ingest_warnings = 0
+    ingest_findings: list[Any] = []
+
+    from scopio.collect.ingest.parsers import ingest_linter_report
+
+    for src in sources:
+        if not isinstance(src, dict):
+            continue
+        src_name = str(src.get("name", "linter"))
+        src_path = src.get("path")
+        if not src_path:
+            continue
+        report_file = proj_path / str(src_path)
+        res = ingest_linter_report(report_file, tool_hint=src_name)
+        ingest_results.append(res)
+        ingest_errors += int(res.get("errors", 0))
+        ingest_warnings += int(res.get("warnings", 0))
+        for f in res.get("findings", []):
+            ingest_findings.append(f)
+
+    return ingest_results, ingest_errors, ingest_warnings, ingest_findings
+
+
+def _check_single_gate_failure(
+    result: AuditResult,
+    limit_ccn: float,
+    limit_warnings: int,
+    limit_function_ccn: float | None,
+    max_errors: int | None,
+    max_warnings_ingest: int | None,
+) -> bool:
+    if result["ccn"] > limit_ccn or result["warnings"] > limit_warnings:
+        return True
+    if limit_function_ccn is not None and float(result.get("ccn_max") or 0.0) > limit_function_ccn:
+        return True
+    if max_errors is not None and result.get("ingest_errors", 0) > max_errors:
+        return True
+    if max_warnings_ingest is not None and result.get("ingest_warnings", 0) > max_warnings_ingest:
+        return True
+    return False
+
+
 class MetricsAuditor:
     def _table_columns(self, conn: sqlite3.Connection, table: str) -> set[str]:
         """Return the set of column names for a table (safe — table arg is internal constant)."""
@@ -432,6 +477,7 @@ class MetricsAuditor:
 
     def _audit_project(self, target_rel_path: str) -> AuditResult | None:
         proj_path = (self.projects_dir / target_rel_path).resolve()
+
         if not proj_path.exists() and target_rel_path == self.projects_dir.name:
             proj_path = self.projects_dir.resolve()
 
@@ -472,25 +518,7 @@ class MetricsAuditor:
         # Ingest linter reports
         ingest_config = self.config.get("ingest", {}) or {}
         sources = ingest_config.get("sources", []) or []
-        ingest_results: list[Any] = []
-        ingest_errors = 0
-        ingest_warnings = 0
-        ingest_findings: list[Any] = []
-
-        from scopio.collect.ingest.parsers import ingest_linter_report
-
-        for src in sources:
-            if isinstance(src, dict):
-                src_name = str(src.get("name", "linter"))
-                src_path = src.get("path")
-                if src_path:
-                    report_file = proj_path / str(src_path)
-                    res = ingest_linter_report(report_file, tool_hint=src_name)
-                    ingest_results.append(res)
-                    ingest_errors += int(res.get("errors", 0))
-                    ingest_warnings += int(res.get("warnings", 0))
-                    for f in res.get("findings", []):
-                        ingest_findings.append(f)
+        ingest_results, ingest_errors, ingest_warnings, ingest_findings = _collect_ingest_sources(proj_path, sources)
 
         if ingest_warnings > 0:
             warnings = ingest_warnings
@@ -708,6 +736,7 @@ class MetricsAuditor:
     def _evaluate_quality_gates(
         self, results: list[AuditResult], config: dict[str, Any]
     ) -> tuple[list[AuditResult], list[AuditResult]]:
+
         quality_gates = config.get("quality_gates", {})
         max_trend_increase = float(quality_gates.get("max_ccn_trend_increase", 0.2))
         trend_sensitive = set(quality_gates.get("trend_sensitive_projects", []))
@@ -719,19 +748,10 @@ class MetricsAuditor:
         gate_failures = []
         for result in results:
             limit_ccn, limit_warnings, limit_function_ccn = self._effective_limits(result, config)
-            if result["ccn"] > limit_ccn or result["warnings"] > limit_warnings:
+            if _check_single_gate_failure(
+                result, limit_ccn, limit_warnings, limit_function_ccn, max_errors, max_warnings_ingest
+            ):
                 gate_failures.append(result)
-                continue
-            if limit_function_ccn is not None and float(result.get("ccn_max") or 0.0) > limit_function_ccn:
-                gate_failures.append(result)
-                continue
-
-            if max_errors is not None and result.get("ingest_errors", 0) > max_errors:
-                gate_failures.append(result)
-                continue
-            if max_warnings_ingest is not None and result.get("ingest_warnings", 0) > max_warnings_ingest:
-                gate_failures.append(result)
-                continue
 
         trend_failures = []
         for result in results:

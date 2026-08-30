@@ -12,6 +12,28 @@ def _normalize_path(uri: str) -> str:
     return cleaned.replace("\\", "/")
 
 
+def _parse_ruff_item(item: dict[str, Any], source: str) -> Finding | None:
+    if not isinstance(item, dict):
+        return None
+    rule = str(item.get("code") or "ruff-violation")
+    file_path = _normalize_path(str(item.get("filename") or ""))
+    msg = str(item.get("message") or "")
+    loc = item.get("location") or {}
+    line_val = loc.get("row") if isinstance(loc, dict) else None
+    line = int(line_val) if line_val is not None and str(line_val).isdigit() else None
+
+    severity: Any = "error" if rule.startswith("E9") or rule.startswith("F82") else "warning"
+
+    return {
+        "source": source,
+        "file": file_path,
+        "rule": rule,
+        "severity": severity,
+        "message": msg,
+        "line": line,
+    }
+
+
 def parse_ruff_json(content: str, source: str = "ruff") -> IngestSummary:
     try:
         data = json.loads(content)
@@ -25,32 +47,14 @@ def parse_ruff_json(content: str, source: str = "ruff") -> IngestSummary:
     warnings = 0
 
     for item in data:
-        if not isinstance(item, dict):
+        finding = _parse_ruff_item(item, source)
+        if not finding:
             continue
-        rule = str(item.get("code") or "ruff-violation")
-        file_path = _normalize_path(str(item.get("filename") or ""))
-        msg = str(item.get("message") or "")
-        loc = item.get("location") or {}
-        line_val = loc.get("row") if isinstance(loc, dict) else None
-        line = int(line_val) if line_val is not None and str(line_val).isdigit() else None
-
-        # Syntax errors vs normal lint warnings
-        severity: Any = "error" if rule.startswith("E9") or rule.startswith("F82") else "warning"
-        if severity == "error":
+        if finding["severity"] == "error":
             errors += 1
         else:
             warnings += 1
-
-        findings.append(
-            {
-                "source": source,
-                "file": file_path,
-                "rule": rule,
-                "severity": severity,
-                "message": msg,
-                "line": line,
-            }
-        )
+        findings.append(finding)
 
     status: Any = "violations" if findings else "clean"
     return {
@@ -60,6 +64,27 @@ def parse_ruff_json(content: str, source: str = "ruff") -> IngestSummary:
         "warnings": warnings,
         "info": 0,
         "findings": findings,
+    }
+
+
+def _parse_eslint_msg(item: dict[str, Any], file_path: str, source: str) -> Finding | None:
+    if not isinstance(item, dict):
+        return None
+    rule = str(item.get("ruleId") or "eslint-violation")
+    msg = str(item.get("message") or "")
+    l_val = item.get("line")
+    line = int(l_val) if l_val is not None and str(l_val).isdigit() else None
+
+    sev_num = item.get("severity", 1)
+    severity: Any = "error" if sev_num == 2 else ("warning" if sev_num == 1 else "info")
+
+    return {
+        "source": source,
+        "file": file_path,
+        "rule": rule,
+        "severity": severity,
+        "message": msg,
+        "line": line,
     }
 
 
@@ -82,33 +107,18 @@ def parse_eslint_json(content: str, source: str = "eslint") -> IngestSummary:
         file_path = _normalize_path(str(file_entry.get("filePath") or ""))
         messages = file_entry.get("messages") or []
         for item in messages:
-            if not isinstance(item, dict):
+            finding = _parse_eslint_msg(item, file_path, source)
+            if not finding:
                 continue
-            rule = str(item.get("ruleId") or "eslint-violation")
-            msg = str(item.get("message") or "")
-            l_val = item.get("line")
-            line = int(l_val) if l_val is not None and str(l_val).isdigit() else None
 
-            sev_num = item.get("severity", 1)
-
-            severity: Any = "error" if sev_num == 2 else ("warning" if sev_num == 1 else "info")
-            if severity == "error":
+            if finding["severity"] == "error":
                 errors += 1
-            elif severity == "warning":
+            elif finding["severity"] == "warning":
                 warnings += 1
             else:
                 info += 1
 
-            findings.append(
-                {
-                    "source": source,
-                    "file": file_path,
-                    "rule": rule,
-                    "severity": severity,
-                    "message": msg,
-                    "line": line,
-                }
-            )
+            findings.append(finding)
 
     status: Any = "violations" if findings else "clean"
     return {
@@ -119,6 +129,12 @@ def parse_eslint_json(content: str, source: str = "eslint") -> IngestSummary:
         "info": info,
         "findings": findings,
     }
+
+
+def _extract_clippy_span(spans: Any) -> tuple[str, int | None]:
+    if isinstance(spans, list) and len(spans) > 0 and isinstance(spans[0], dict):
+        return _normalize_path(str(spans[0].get("file_name") or "")), spans[0].get("line_start")
+    return "", None
 
 
 def _extract_clippy_item(item: dict[str, Any], source: str) -> Finding | None:
@@ -135,13 +151,7 @@ def _extract_clippy_item(item: dict[str, Any], source: str) -> Finding | None:
     level = str(msg_obj.get("level") or "warning")
 
     severity: Any = "error" if level == "error" else ("warning" if level == "warning" else "info")
-
-    spans = msg_obj.get("spans") or []
-    file_path = ""
-    line_num = None
-    if isinstance(spans, list) and len(spans) > 0 and isinstance(spans[0], dict):
-        file_path = _normalize_path(str(spans[0].get("file_name") or ""))
-        line_num = spans[0].get("line_start")
+    file_path, line_num = _extract_clippy_span(msg_obj.get("spans"))
 
     return {
         "source": source,
