@@ -75,31 +75,9 @@ def _run_cmd(path: Path, cmd: list[str]) -> str:
 
 
 def _git_info(path: Path) -> GitInfo:
-    if not (path / ".git").is_dir():
-        return {
-            "commits": 0,
-            "branch": "n/a",
-            "last_commit_date": "never",
-            "author": "",
-            "dirty": False,
-            "commit_hash": "n/a",
-        }
+    from scopio.collect.run.runner import fetch_git_info
 
-    commits = _run_cmd(path, ["git", "rev-list", "--count", "HEAD"])
-    branch = _run_cmd(path, ["git", "branch", "--show-current"])
-    date = _run_cmd(path, ["git", "log", "-1", "--format=%ad", "--date=short"])
-    author = _run_cmd(path, ["git", "log", "-1", "--format=%an"])
-    commit_hash = _run_cmd(path, ["git", "rev-parse", "HEAD"])
-    status = _run_cmd(path, ["git", "status", "--porcelain"])
-
-    return {
-        "commits": int(commits) if commits.isdigit() else 0,
-        "branch": branch or "unknown",
-        "last_commit_date": date or "never",
-        "author": author,
-        "dirty": bool(status),
-        "commit_hash": commit_hash or "n/a",
-    }
+    return fetch_git_info(path)
 
 
 def _run_tool_version(cmd: str) -> str:

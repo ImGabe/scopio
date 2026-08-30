@@ -186,7 +186,7 @@ def test_git_info_with_git(monkeypatch: pytest.MonkeyPatch) -> None:
         key = " ".join(cmd[1:])
         return mapping.get(key, "")
 
-    monkeypatch.setattr("scopio.audit._run_cmd", fake_run_cmd)
+    monkeypatch.setattr("scopio.collect.run.runner.run_cmd", fake_run_cmd)
 
     try:
         result = _git_info(tmp)

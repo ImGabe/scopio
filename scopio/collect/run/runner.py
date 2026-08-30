@@ -37,13 +37,17 @@ def fetch_git_info(path: Path) -> GitInfo:
     commit_hash = run_cmd(path, ["git", "rev-parse", "HEAD"])
     status = run_cmd(path, ["git", "status", "--porcelain"])
 
+    num_commits = int(commits) if commits.isdigit() else 0
+    clean_hash = commit_hash if num_commits > 0 and commit_hash != "HEAD" else "n/a"
+    clean_date = date if num_commits > 0 else "never"
+
     return {
-        "commits": int(commits) if commits.isdigit() else 0,
+        "commits": num_commits,
         "branch": branch or "unknown",
-        "last_commit_date": date or "never",
-        "author": author,
+        "last_commit_date": clean_date,
+        "author": author if num_commits > 0 else "",
         "dirty": bool(status),
-        "commit_hash": commit_hash or "n/a",
+        "commit_hash": clean_hash,
     }
 
 
