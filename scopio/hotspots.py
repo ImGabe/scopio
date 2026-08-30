@@ -32,12 +32,13 @@ def compute_hotspots(db_path: Path, project: str, limit: int = 10) -> list[Hotsp
         # Fetch file_metrics from recent audits for project
         rows = conn.execute(
             """
-            SELECT file_path, nloc, ccn, warnings, COUNT(*) as changes_count, MAX(ccn) as max_ccn
+            SELECT path as file_path, nloc, ccn, warnings, COUNT(*) as changes_count, MAX(ccn) as max_ccn
             FROM file_metrics
             JOIN metrics ON file_metrics.audit_id = metrics.audit_id
             WHERE metrics.project = ?
-            GROUP BY file_path
+            GROUP BY path
             ORDER BY max_ccn DESC
+
             """,
             (project,),
         ).fetchall()

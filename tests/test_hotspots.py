@@ -24,18 +24,18 @@ def test_compute_and_render_hotspots(tmp_path: Path) -> None:
         )
         conn.execute(
             "CREATE TABLE IF NOT EXISTS file_metrics ("
-            "id INTEGER PRIMARY KEY AUTOINCREMENT, audit_id INTEGER, file_path TEXT, nloc INTEGER, "
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, audit_id INTEGER, path TEXT, nloc INTEGER, "
             "ccn REAL, warnings INTEGER)"
         )
         # Insert audit 1
         conn.execute("INSERT INTO metrics (project) VALUES ('proj-a')")
         audit_id_1 = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
         conn.execute(
-            "INSERT INTO file_metrics (audit_id, file_path, nloc, ccn, warnings) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO file_metrics (audit_id, path, nloc, ccn, warnings) VALUES (?, ?, ?, ?, ?)",
             (audit_id_1, "src/heavy.py", 200, 25.0, 2),
         )
         conn.execute(
-            "INSERT INTO file_metrics (audit_id, file_path, nloc, ccn, warnings) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO file_metrics (audit_id, path, nloc, ccn, warnings) VALUES (?, ?, ?, ?, ?)",
             (audit_id_1, "src/light.py", 50, 3.0, 0),
         )
 
@@ -43,7 +43,7 @@ def test_compute_and_render_hotspots(tmp_path: Path) -> None:
         conn.execute("INSERT INTO metrics (project) VALUES ('proj-a')")
         audit_id_2 = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
         conn.execute(
-            "INSERT INTO file_metrics (audit_id, file_path, nloc, ccn, warnings) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO file_metrics (audit_id, path, nloc, ccn, warnings) VALUES (?, ?, ?, ?, ?)",
             (audit_id_2, "src/heavy.py", 220, 28.0, 3),
         )
 
@@ -80,11 +80,11 @@ def test_cli_hotspots_command(tmp_path: Path) -> None:
     with open_db(db_path) as conn:
         conn.execute("CREATE TABLE IF NOT EXISTS metrics (audit_id INTEGER PRIMARY KEY, project TEXT)")
         conn.execute(
-            "CREATE TABLE IF NOT EXISTS file_metrics (id INTEGER PRIMARY KEY, audit_id INTEGER, file_path TEXT, nloc INTEGER, ccn REAL, warnings INTEGER)"
+            "CREATE TABLE IF NOT EXISTS file_metrics (id INTEGER PRIMARY KEY, audit_id INTEGER, path TEXT, nloc INTEGER, ccn REAL, warnings INTEGER)"
         )
         conn.execute("INSERT INTO metrics (audit_id, project) VALUES (1, 'proj-a')")
         conn.execute(
-            "INSERT INTO file_metrics (audit_id, file_path, nloc, ccn, warnings) VALUES (1, 'app.py', 100, 15.0, 0)"
+            "INSERT INTO file_metrics (audit_id, path, nloc, ccn, warnings) VALUES (1, 'app.py', 100, 15.0, 0)"
         )
 
     result = runner.invoke(
