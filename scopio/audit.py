@@ -133,6 +133,21 @@ def _tool_versions() -> dict[str, str]:
     return versions
 
 
+def _parse_single_lizard_row(row: list[str]) -> tuple[int, float, str, str, int | None] | None:
+    if len(row) < 7:
+        return None
+    try:
+        nloc = int(row[0])
+        ccn = float(row[1])
+        file_path = str(row[6])
+    except (IndexError, ValueError):
+        return None
+
+    func_name = str(row[7]) if len(row) >= 8 else "global"
+    start_line = int(row[9]) if len(row) >= 10 and row[9].isdigit() else None
+    return nloc, ccn, file_path, func_name, start_line
+
+
 def _parse_lizard_csv(output: str) -> LizardSummary:
     """Parse lizard --csv output into LizardSummary.
 
@@ -155,20 +170,13 @@ def _parse_lizard_csv(output: str) -> LizardSummary:
     warning_count = 0
 
     for row in reader:
-        if len(row) < 7:
-            continue
-        try:
-            nloc = int(row[0])
-            ccn = float(row[1])
-            file_path = str(row[6])
-        except (IndexError, ValueError):
+        parsed_row = _parse_single_lizard_row(row)
+        if not parsed_row:
             continue
 
+        nloc, ccn, file_path, func_name, start_line = parsed_row
         total_nloc += nloc
         func_ccns.append(ccn)
-
-        func_name = str(row[7]) if len(row) >= 8 else "global"
-        start_line = int(row[9]) if len(row) >= 10 and row[9].isdigit() else None
         offenders_list.append({"file": file_path, "function": func_name, "ccn": ccn, "line": start_line})
 
         entry = by_path.setdefault(

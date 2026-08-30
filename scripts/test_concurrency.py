@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -31,8 +32,6 @@ def worker(worker_id: int, db_path: Path) -> tuple[int, float]:
 
 
 # Setup
-import tempfile
-
 with tempfile.TemporaryDirectory() as tmp:
     db_path = Path(tmp) / "test.db"
     conn = sqlite3.connect(str(db_path))

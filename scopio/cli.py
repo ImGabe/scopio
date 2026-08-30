@@ -41,6 +41,39 @@ def cli(ctx: click.Context, config: str | None, projects_dir: str | None, output
     }
 
 
+def _display_gate_failures(gate_failures: list[AuditResult]) -> None:
+
+    if not gate_failures:
+        return
+    click.echo("\nQuality Gate Failures:", err=True)
+    for r in gate_failures:
+        click.echo(
+            f"  [GATE FAIL] {r['project']}: CCN={r.get('ccn', 0):.1f}, MaxCCN={r.get('ccn_max', 0)}, "
+            f"Warnings={r.get('warnings', 0)}, IngestErrors={r.get('ingest_errors', 0)}",
+            err=True,
+        )
+        top = r.get("top_offenders") or []
+        if top:
+            click.echo("    Top Complexity Offenders:", err=True)
+            for off in top[:3]:
+                func = off.get("function") or "global"
+                f_path = off.get("file") or ""
+                l_str = f":{off['line']}" if off.get("line") else ""
+                click.echo(f"      - {f_path}{l_str} -> {func} (CCN={off.get('ccn', 0)})", err=True)
+
+
+def _display_summary_table(results: list[AuditResult]) -> None:
+    click.echo("\nProject Metrics Summary\n" + "-" * 75)
+    click.echo(f"{'Project':<20} {'Lang':<10} {'Files':<7} {'LOC':<8} {'NLOC':<8} {'AvgCCN':<8} {'MaxCCN':<8}")
+    click.echo("-" * 75)
+    for r in results:
+        click.echo(
+            f"{r['project']:<20} {r['language']:<10} {r['files']:<7} {r['loc']:<8} {r['nloc']:<8} "
+            f"{r['ccn']:<8.1f} {r.get('ccn_max') or '-':<8}"
+        )
+    click.echo("-" * 75)
+
+
 @cli.command()
 @click.option("--verbose", is_flag=True, help="Verbose per-project logging")
 @click.option("--quiet", is_flag=True, help="Suppress logging")
@@ -59,22 +92,7 @@ def run(ctx: click.Context, verbose: bool, quiet: bool, incremental: bool, json_
     if failures:
         click.echo(f"Failures: {len(failures)} project(s) could not be audited.", err=True)
 
-    if gate_failures:
-        click.echo("\nQuality Gate Failures:", err=True)
-        for r in gate_failures:
-            click.echo(
-                f"  [GATE FAIL] {r['project']}: CCN={r.get('ccn', 0):.1f}, MaxCCN={r.get('ccn_max', 0)}, "
-                f"Warnings={r.get('warnings', 0)}, IngestErrors={r.get('ingest_errors', 0)}",
-                err=True,
-            )
-            top = r.get("top_offenders") or []
-            if top:
-                click.echo("    Top Complexity Offenders:", err=True)
-                for off in top[:3]:
-                    func = off.get("function") or "global"
-                    f_path = off.get("file") or ""
-                    l_str = f":{off['line']}" if off.get("line") else ""
-                    click.echo(f"      - {f_path}{l_str} -> {func} (CCN={off.get('ccn', 0)})", err=True)
+    _display_gate_failures(gate_failures)
 
     if trend_failures:
         click.echo("\nTrend Gate Failures:", err=True)
@@ -85,15 +103,7 @@ def run(ctx: click.Context, verbose: bool, quiet: bool, incremental: bool, json_
         raise click.ClickException("Audit finished with failures.")
 
     if not json_output and not quiet:
-        click.echo("\nProject Metrics Summary\n" + "-" * 75)
-        click.echo(f"{'Project':<20} {'Lang':<10} {'Files':<7} {'LOC':<8} {'NLOC':<8} {'AvgCCN':<8} {'MaxCCN':<8}")
-        click.echo("-" * 75)
-        for r in results:
-            click.echo(
-                f"{r['project']:<20} {r['language']:<10} {r['files']:<7} {r['loc']:<8} {r['nloc']:<8} "
-                f"{r['ccn']:<8.1f} {r.get('ccn_max') or '-':<8}"
-            )
-        click.echo("-" * 75)
+        _display_summary_table(results)
 
     click.echo(f"Audit finished: {len(results)} projects.")
     if json_output or quiet:

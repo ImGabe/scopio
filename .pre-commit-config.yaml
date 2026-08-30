@@ -16,9 +16,20 @@ repos:
         stages: [commit-msg]
   - repo: local
     hooks:
+      - id: lizard-ccn-check
+        name: lizard CCN check (MaxCCN <= 15)
+        entry: uv run lizard -C 15 scopio/
+        language: system
+        pass_filenames: false
+      - id: scopio-audit-check
+        name: scopio self-audit (quality gates)
+        entry: uv run scopio run --verbose
+        language: system
+        pass_filenames: false
       - id: scopio-check
         name: scopio quality check (diff --dirty)
         entry: uv run scopio diff --dirty
         language: system
         pass_filenames: false
+
 
