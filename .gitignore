@@ -8,4 +8,6 @@ dist/
 build/
 .scopio/
 scopio.toml
+demo_app/
 *.DS_Store
+

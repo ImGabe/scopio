@@ -66,6 +66,10 @@ class AuditResult(TypedDict, total=False):
     tool_versions: str
     duration_seconds: float
     file_metrics: list[FileMetric]
+    ingest_results: list[dict[str, Any]]
+    ingest_errors: int
+    ingest_warnings: int
+    ingest_findings: list[dict[str, Any]]
 
 
 class DiffDelta(TypedDict, total=False):

@@ -22,7 +22,7 @@ classifiers = [
     "Topic :: Software Development :: Quality Assurance",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
-dependencies = ["click>=8.1", "lizard>=1.24,<1.25"]
+dependencies = ["click>=8.1", "lizard>=1.24,<1.25", "pathspec>=0.12"]
 
 [project.urls]
 Homepage = "https://github.com/imgabe/scopio"

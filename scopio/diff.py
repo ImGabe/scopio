@@ -15,7 +15,9 @@ def _safe_num(value: Any, default: float = 0) -> float:
     return value if value is not None else default
 
 
-def project_diff(db_path: Path, project: str, base: str = "previous") -> DiffSummary:
+def project_diff(
+    db_path: Path, project: str, base: str = "previous", dirty_metrics: dict[str, Any] | None = None
+) -> DiffSummary:
     with open_db(db_path) as conn:
         rows = conn.execute(
             """
@@ -28,11 +30,16 @@ def project_diff(db_path: Path, project: str, base: str = "previous") -> DiffSum
             (project,),
         ).fetchall()
 
-    if len(rows) < 2:
-        raise click.ClickException("Not enough history for diff (requires at least 2 audits).")
-
-    base_row = dict(rows[0] if base == "first" else rows[-2])
-    latest = dict(rows[-1])
+    if dirty_metrics:
+        if len(rows) < 1:
+            raise click.ClickException("No historical audit found to compare working tree against.")
+        base_row = dict(rows[0] if base == "first" else rows[-1])
+        latest = dirty_metrics
+    else:
+        if len(rows) < 2:
+            raise click.ClickException("Not enough history for diff (requires at least 2 audits or --dirty).")
+        base_row = dict(rows[0] if base == "first" else rows[-2])
+        latest = dict(rows[-1])
 
     loc_delta = _safe_num(latest.get("loc")) - _safe_num(base_row.get("loc"))
     ccn_delta = _safe_num(latest.get("ccn")) - _safe_num(base_row.get("ccn"))
@@ -58,14 +65,14 @@ def project_diff(db_path: Path, project: str, base: str = "previous") -> DiffSum
             "warnings": base_row.get("warnings"),
         },
         "latest": {
-            "timestamp": latest.get("timestamp"),
-            "branch": latest.get("branch"),
-            "commit_hash": latest.get("commit_hash"),
+            "timestamp": latest.get("timestamp") or "working tree (uncommitted)",
+            "branch": latest.get("branch") or "working tree",
+            "commit_hash": latest.get("commit_hash") or "uncommitted",
             "loc": latest.get("loc"),
             "ccn": latest.get("ccn"),
             "ccn_max": latest.get("ccn_max"),
             "warnings": latest.get("warnings"),
-            "dirty": latest.get("dirty"),
+            "dirty": True if dirty_metrics else latest.get("dirty"),
         },
         "delta": {
             "loc": loc_delta,
@@ -358,3 +365,39 @@ def render_ci_summary(summary: dict[str, Any], thresholds: dict[str, float] | No
         "failures": failures,
     }
     return json.dumps(payload, indent=2)
+
+
+def render_github_comment(summary: dict[str, Any], thresholds: dict[str, float] | None = None) -> str:
+    failures = _detect_ci_failures(summary, thresholds)
+    status_icon = "❌ **FAILED**" if failures else "✅ **PASSED**"
+
+    project = summary.get("project", "Project")
+    base = summary["base"]
+    latest = summary["latest"]
+    delta = summary["delta"]
+
+    base_commit = str(base.get("commit_hash") or "")[:7]
+    latest_commit = str(latest.get("commit_hash") or "")[:7]
+
+    lines = [
+        f"## 🔍 Scopio Audit Summary — {project}",
+        "",
+        f"**Status**: {status_icon}",
+        "",
+        f"| Metric | Base (`{base_commit}`) | Current (`{latest_commit}`) | Delta |",
+        "|---|---:|---:|---:|",
+        f"| **LOC** | {base.get('loc', '-')} | {latest.get('loc', '-')} | `{delta.get('loc', 0):+}` |",
+        f"| **Avg CCN** | {base.get('ccn', '-')} | {latest.get('ccn', '-')} | `{delta.get('ccn', 0):+.2f}` |",
+        f"| **Max CCN** | {base.get('ccn_max', '-')} | {latest.get('ccn_max', '-')} | - |",
+        f"| **Warnings** | {base.get('warnings', '-')} | {latest.get('warnings', '-')} | `{delta.get('warnings', 0):+}` |",
+        "",
+    ]
+
+    if failures:
+        lines.append("### ⚠️ Quality Gate Failures")
+        for f in failures:
+            lines.append(f"- {f}")
+        lines.append("")
+
+    lines.append("*Generated automatically by [Scopio](https://github.com/imgabe/scopio)*")
+    return "\n".join(lines) + "\n"
