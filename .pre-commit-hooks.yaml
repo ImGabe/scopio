@@ -1,0 +1,7 @@
+- id: scopio
+  name: scopio quality check
+  description: Audit code metrics (LOC, Cyclomatic Complexity, linter reports) and enforce quality gates using Scopio.
+  entry: scopio diff --dirty
+  language: python
+  types: [python]
+  pass_filenames: false
