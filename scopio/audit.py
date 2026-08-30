@@ -160,6 +160,7 @@ def _parse_lizard_csv(output: str) -> LizardSummary:
 
     CSV format (one line per function):
     NLOC,CCN,token,PARAM,length,location,file,function,function_long,start_line,end_line
+    Aggregates per-function entries into per-file summary records.
     """
     import csv as csv_mod
     import io
@@ -169,9 +170,9 @@ def _parse_lizard_csv(output: str) -> LizardSummary:
         return {"nloc": 0, "ccn": 0.0, "warnings": 0, "files": []}
 
     reader = csv_mod.reader(io.StringIO(output))
-    file_metrics: list[dict[str, Any]] = []
+    by_path: dict[str, dict[str, Any]] = {}
     total_nloc = 0
-    total_ccn = 0.0
+    func_ccns: list[float] = []
     warning_count = 0
 
     for row in reader:
@@ -180,30 +181,34 @@ def _parse_lizard_csv(output: str) -> LizardSummary:
         try:
             nloc = int(row[0])
             ccn = float(row[1])
-            file_path = row[6]
+            file_path = str(row[6])
         except (IndexError, ValueError):
             continue
 
         total_nloc += nloc
-        total_ccn += ccn
-        file_metrics.append(
+        func_ccns.append(ccn)
+
+        entry = by_path.setdefault(
+            file_path,
             {
-                "path": str(file_path),
-                "nloc": nloc,
-                "ccn": ccn,
+                "path": file_path,
+                "nloc": 0,
+                "ccn": 0.0,
                 "warnings": 0,
-            }
+            },
         )
+        entry["nloc"] += nloc
+        entry["ccn"] = max(entry["ccn"], ccn)
 
-    total_ccn = round(total_ccn / len(file_metrics), 1) if file_metrics else 0.0
+    total_ccn = round(sum(func_ccns) / len(func_ccns), 1) if func_ccns else 0.0
 
-    if file_metrics and total_ccn == 0.0:
+    if func_ccns and total_ccn == 0.0:
         logger = logging.getLogger("scopio")
         logger.warning(
             json.dumps(
                 {
                     "event": "lizard_parse_suspicious",
-                    "files_count": len(file_metrics),
+                    "files_count": len(by_path),
                     "total_nloc": total_nloc,
                     "ccn": total_ccn,
                 }
@@ -212,14 +217,15 @@ def _parse_lizard_csv(output: str) -> LizardSummary:
 
     from typing import cast
 
-    ccn_max = round(max(fm["ccn"] for fm in file_metrics), 1) if file_metrics else 0.0
+    ccn_max = round(max(func_ccns), 1) if func_ccns else 0.0
+    aggregated_files = list(by_path.values())
 
     return {
         "nloc": total_nloc,
         "ccn": total_ccn,
         "ccn_max": ccn_max,
         "warnings": warning_count,
-        "files": [cast(LizardFile, fm) for fm in file_metrics],
+        "files": [cast(LizardFile, fm) for fm in aggregated_files],
     }
 
 
@@ -260,6 +266,36 @@ def _language_from_scc(scc_data: list[SccRecord], ignored: set[str]) -> str:
     candidates.sort(key=lambda d: d.get("Code", 0), reverse=True)
     name = candidates[0].get("Name")
     return str(name) if name else "Unknown"
+
+
+def _parse_gitignore(gitignore_path: Path) -> tuple[list[str], list[str]]:
+    """Parse a .gitignore file using pathspec and extract exclusion patterns for scc and lizard."""
+    import pathspec
+
+    scc_ex: list[str] = []
+    lizard_ex: list[str] = []
+    if not gitignore_path.is_file():
+        return scc_ex, lizard_ex
+    try:
+        lines = gitignore_path.read_text().splitlines()
+    except OSError:
+        return scc_ex, lizard_ex
+
+    # Validate syntax with pathspec
+    _spec = pathspec.GitIgnoreSpec.from_lines(lines)
+
+    for line in lines:
+        raw = line.strip()
+        if not raw or raw.startswith("#"):
+            continue
+        cleaned = raw.rstrip("/")
+        if "/" not in cleaned and not any(c in cleaned for c in "*?["):
+            scc_ex.append(cleaned)
+            lizard_ex.extend(["-x", f"*/{cleaned}/*", "-x", f"*/{cleaned}"])
+        else:
+            lizard_ex.extend(["-x", raw])
+
+    return scc_ex, lizard_ex
 
 
 class MetricsAuditor:
@@ -324,6 +360,31 @@ class MetricsAuditor:
         ),
         (7, "ALTER TABLE metrics ADD COLUMN runs_count INTEGER NOT NULL DEFAULT 1"),
         (8, "ALTER TABLE metrics_history ADD COLUMN ccn_max REAL"),
+        (
+            9,
+            """CREATE TABLE IF NOT EXISTS audit_ingest_summary (
+            audit_id INTEGER PRIMARY KEY,
+            source TEXT NOT NULL,
+            status TEXT NOT NULL,
+            errors INTEGER DEFAULT 0,
+            warnings INTEGER DEFAULT 0,
+            info INTEGER DEFAULT 0,
+            FOREIGN KEY(audit_id) REFERENCES metrics(audit_id)
+        );
+        CREATE TABLE IF NOT EXISTS file_findings (
+            finding_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            audit_id INTEGER,
+            project TEXT NOT NULL,
+            source TEXT NOT NULL,
+            path TEXT NOT NULL,
+            rule TEXT NOT NULL,
+            severity TEXT NOT NULL,
+            message TEXT,
+            line INTEGER,
+            FOREIGN KEY(audit_id) REFERENCES metrics(audit_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_file_findings_audit ON file_findings(audit_id, path);""",
+        ),
     ]
 
     def _init_db(self) -> None:
@@ -374,6 +435,12 @@ class MetricsAuditor:
         for pattern in self.config.get("filters", {}).get("minified_files", []):
             lizard_excludes.extend(["-x", pattern])
 
+        # Auto-parse .gitignore
+        gitignore_file = proj_path / ".gitignore"
+        git_scc, git_lizard = _parse_gitignore(gitignore_file)
+        scc_excludes.extend(git_scc)
+        lizard_excludes.extend(git_lizard)
+
         ignore_file = proj_path / ".ignoremetrics"
         if ignore_file.is_file():
             for line in ignore_file.read_text().splitlines():
@@ -387,12 +454,16 @@ class MetricsAuditor:
 
     def _audit_project(self, target_rel_path: str) -> AuditResult | None:
         proj_path = (self.projects_dir / target_rel_path).resolve()
+        if not proj_path.exists() and target_rel_path == self.projects_dir.name:
+            proj_path = self.projects_dir.resolve()
+
         if not proj_path.is_dir():
+            logging.getLogger("scopio").warning(
+                json.dumps({"event": "directory_not_found", "project": target_rel_path})
+            )
             return None
-        # Guard against path traversal outside projects_dir
-        try:
-            proj_path.relative_to(self.projects_dir.resolve())
-        except ValueError:
+
+        if not proj_path.is_relative_to(self.projects_dir.resolve()) and proj_path != self.projects_dir.resolve():
             logging.getLogger("scopio").error(
                 json.dumps({"event": "path_traversal", "project": target_rel_path, "resolved": str(proj_path)})
             )
@@ -420,6 +491,32 @@ class MetricsAuditor:
         if nloc == 0 and any(proj_path.glob("*.fsproj")):
             warnings = self._fs_sharp_fallback(proj_path, warnings)
 
+        # Ingest linter reports
+        ingest_config = self.config.get("ingest", {}) or {}
+        sources = ingest_config.get("sources", []) or []
+        ingest_results: list[Any] = []
+        ingest_errors = 0
+        ingest_warnings = 0
+        ingest_findings: list[Any] = []
+
+        from scopio.collect.ingest.parsers import ingest_linter_report
+
+        for src in sources:
+            if isinstance(src, dict):
+                src_name = str(src.get("name", "linter"))
+                src_path = src.get("path")
+                if src_path:
+                    report_file = proj_path / str(src_path)
+                    res = ingest_linter_report(report_file, tool_hint=src_name)
+                    ingest_results.append(res)
+                    ingest_errors += int(res.get("errors", 0))
+                    ingest_warnings += int(res.get("warnings", 0))
+                    for f in res.get("findings", []):
+                        ingest_findings.append(f)
+
+        if ingest_warnings > 0:
+            warnings = ingest_warnings
+
         duration = (datetime.now(UTC) - start).total_seconds()
         tool_versions = _tool_versions()
 
@@ -446,6 +543,10 @@ class MetricsAuditor:
                 "tool_versions": json.dumps(tool_versions),
                 "duration_seconds": duration,
                 "file_metrics": file_metrics,
+                "ingest_results": ingest_results,
+                "ingest_errors": ingest_errors,
+                "ingest_warnings": ingest_warnings,
+                "ingest_findings": ingest_findings,
             },
         )
 
@@ -551,6 +652,46 @@ class MetricsAuditor:
                 },
             )
 
+    def _save_ingest_metrics(self, conn: sqlite3.Connection, audit_id: int, result: AuditResult) -> None:
+        ingest_results = result.get("ingest_results") or []
+        for ir in ingest_results:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO audit_ingest_summary
+                (audit_id, source, status, errors, warnings, info)
+                VALUES (:audit_id, :source, :status, :errors, :warnings, :info)
+                """,
+                {
+                    "audit_id": audit_id,
+                    "source": ir.get("source", "linter"),
+                    "status": ir.get("status", "clean"),
+                    "errors": ir.get("errors", 0),
+                    "warnings": ir.get("warnings", 0),
+                    "info": ir.get("info", 0),
+                },
+            )
+
+        ingest_findings = result.get("ingest_findings") or []
+        conn.execute("DELETE FROM file_findings WHERE audit_id = ?", (audit_id,))
+        for f in ingest_findings:
+            conn.execute(
+                """
+                INSERT INTO file_findings
+                (audit_id, project, source, path, rule, severity, message, line)
+                VALUES (:audit_id, :project, :source, :path, :rule, :severity, :message, :line)
+                """,
+                {
+                    "audit_id": audit_id,
+                    "project": result["project"],
+                    "source": f.get("source", "linter"),
+                    "path": f.get("file", ""),
+                    "rule": f.get("rule", ""),
+                    "severity": f.get("severity", "warning"),
+                    "message": f.get("message", ""),
+                    "line": f.get("line"),
+                },
+            )
+
     def _save_results(self, results: list[AuditResult]) -> None:
         with open_db(self.db_path) as conn:
             for result in results:
@@ -558,6 +699,7 @@ class MetricsAuditor:
                 if audit_id:
                     self._log_metrics_history(conn, audit_id, result)
                     self._save_file_metrics(conn, audit_id, result)
+                    self._save_ingest_metrics(conn, audit_id, result)
         export_outputs(self.output_dir, results)
 
     @staticmethod
@@ -592,6 +734,10 @@ class MetricsAuditor:
         max_trend_increase = float(quality_gates.get("max_ccn_trend_increase", 0.2))
         trend_sensitive = set(quality_gates.get("trend_sensitive_projects", []))
 
+        ingest_gates = quality_gates.get("ingest", {}) or {}
+        max_errors = ingest_gates.get("max_errors")
+        max_warnings_ingest = ingest_gates.get("max_warnings")
+
         gate_failures = []
         for result in results:
             limit_ccn, limit_warnings, limit_function_ccn = self._effective_limits(result, config)
@@ -600,6 +746,14 @@ class MetricsAuditor:
                 continue
             if limit_function_ccn is not None and float(result.get("ccn_max") or 0.0) > limit_function_ccn:
                 gate_failures.append(result)
+                continue
+
+            if max_errors is not None and result.get("ingest_errors", 0) > max_errors:
+                gate_failures.append(result)
+                continue
+            if max_warnings_ingest is not None and result.get("ingest_warnings", 0) > max_warnings_ingest:
+                gate_failures.append(result)
+                continue
 
         trend_failures = []
         for result in results:
@@ -665,7 +819,10 @@ class MetricsAuditor:
         for target in targets:
             row = self._get_last_metrics(target)
             proj_path = (self.projects_dir / target).resolve()
-            if not proj_path.is_dir():
+            if not proj_path.exists() and target == self.projects_dir.name:
+                proj_path = self.projects_dir.resolve()
+
+            if not proj_path.is_relative_to(self.projects_dir.resolve()) and proj_path != self.projects_dir.resolve():
                 continue
             if row is None:
                 selected.append(target)
