@@ -10,9 +10,11 @@ Code metrics auditor with SQLite history, diffs and quality gates.
 
 - Audits code metrics (lines, complexity, warnings, languages) across multiple projects.
 - Stores audit history in SQLite with diffs and quality gates.
+- Analyzes high-risk code hotspots (Complexity x Churn) — see [Hotspots Guide](docs/HOTSPOTS.md).
 - Ingests external linter reports (Ruff, ESLint, Clippy, SARIF) — see [Ingestion Cookbook](docs/COOKBOOK.md).
 - Exports results as JSON, CSV and Markdown.
 - Compares audits and detects regressions for CI (`--fail-on-regression`).
+
 
 
 ## Install

@@ -172,6 +172,26 @@ def report(ctx: click.Context, project: str | None, limit: int, fmt: str) -> Non
         )
 
 
+@cli.command("hotspots")
+@click.option("--project", default=None, help="Project name (auto-detected if omitted and single project)")
+@click.option("--limit", default=10, show_default=True, help="Max hotspots to display")
+@click.option(
+    "--format", "fmt", type=click.Choice(["text", "json", "csv", "markdown"]), default="text", help="Output format"
+)
+@click.pass_context
+def hotspots_cmd(ctx: click.Context, project: str | None, limit: int, fmt: str) -> None:
+    """Analyze high-risk code hotspots (Complexity x Churn)."""
+    from scopio.hotspots import compute_hotspots, render_hotspots
+
+    proj_name = _resolve_project(ctx, project)
+    db_path = ctx.obj["output_dir"] / "scopio.db"
+    records = compute_hotspots(db_path, proj_name, limit=limit)
+    if not records:
+        click.echo(f"No hotspot data found for: {proj_name}")
+        return
+    click.echo(render_hotspots(records, fmt=fmt))
+
+
 @cli.command("diff")
 @click.option("--project", default=None, help="Project name (auto-detected if omitted and single project)")
 @click.option(

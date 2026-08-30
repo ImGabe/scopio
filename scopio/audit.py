@@ -97,7 +97,7 @@ class _ToolVersionSpec(TypedDict):
 
 
 EXPECTED_VERSIONS: dict[str, _ToolVersionSpec] = {
-    "scc": {"min": (3, 3), "max": (4, 0), "hint": "scc >=3.3,<4.0"},
+    "scc": {"min": (3, 3), "max": (5, 0), "hint": "scc >=3.3,<5.0"},
     "lizard": {"min": (1, 24), "max": (1, 25), "hint": "lizard >=1.24,<1.25"},
 }
 

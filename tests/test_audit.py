@@ -602,7 +602,7 @@ def test_validate_tool_versions_all_good() -> None:
 def test_validate_tool_versions_diverge() -> None:
     from scopio.audit import _validate_tool_versions
 
-    versions = {"scc": "scc version 4.0.0", "lizard": "lizard 1.23.0"}
+    versions = {"scc": "scc version 5.0.0", "lizard": "lizard 1.23.0"}
     warnings = _validate_tool_versions(versions)
     assert len(warnings) == 2, f"Expected 2 warnings, got: {warnings}"
     assert any("scc" in w for w in warnings)
