@@ -718,3 +718,30 @@ def test_filter_incremental_no_previous_audit(tmp_path: Path) -> None:
 
     result = auditor._filter_incremental(["new-proj"])
     assert len(result) == 1, f"Expected new project selected, got {result}"
+
+
+def test_parse_gitignore(tmp_path: Path) -> None:
+    from scopio.audit import _parse_gitignore
+
+    gitignore = tmp_path / ".gitignore"
+    gitignore.write_text("# comment\ntarget/\n*.log\nnode_modules\n")
+
+    scc_ex, lizard_ex = _parse_gitignore(gitignore)
+    assert "target" in scc_ex
+    assert "node_modules" in scc_ex
+    assert "-x" in lizard_ex
+    assert "*.log" in lizard_ex
+
+
+def test_parse_lizard_csv_aggregates_files() -> None:
+    # 2 functions in the same file
+    multi_func_csv = """10,5,30,2,1,foo@10@scopio/foo.py,scopio/foo.py,foo,foo(x),1,10
+20,8,40,3,1,bar@20@scopio/foo.py,scopio/foo.py,bar,bar(y),12,25
+"""
+    result = _parse_lizard_csv(multi_func_csv)
+    assert result["nloc"] == 30  # 10 + 20
+    assert result["ccn_max"] == 8.0
+    assert len(result["files"]) == 1  # aggregated into 1 file entry!
+    assert result["files"][0]["path"] == "scopio/foo.py"
+    assert result["files"][0]["nloc"] == 30
+    assert result["files"][0]["ccn"] == 8.0
