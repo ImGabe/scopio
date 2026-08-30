@@ -121,6 +121,38 @@ def parse_eslint_json(content: str, source: str = "eslint") -> IngestSummary:
     }
 
 
+def _extract_clippy_item(item: dict[str, Any], source: str) -> Finding | None:
+    if not isinstance(item, dict) or item.get("reason") != "compiler-message":
+        return None
+
+    msg_obj = item.get("message") or {}
+    if not isinstance(msg_obj, dict):
+        return None
+
+    code_obj = msg_obj.get("code") or {}
+    rule = str(code_obj.get("code") or "clippy-message") if isinstance(code_obj, dict) else "clippy-message"
+    msg = str(msg_obj.get("message") or "")
+    level = str(msg_obj.get("level") or "warning")
+
+    severity: Any = "error" if level == "error" else ("warning" if level == "warning" else "info")
+
+    spans = msg_obj.get("spans") or []
+    file_path = ""
+    line_num = None
+    if isinstance(spans, list) and len(spans) > 0 and isinstance(spans[0], dict):
+        file_path = _normalize_path(str(spans[0].get("file_name") or ""))
+        line_num = spans[0].get("line_start")
+
+    return {
+        "source": source,
+        "file": file_path,
+        "rule": rule,
+        "severity": severity,
+        "message": msg,
+        "line": line_num,
+    }
+
+
 def parse_clippy_json(content: str, source: str = "clippy") -> IngestSummary:
     findings: list[Finding] = []
     errors = 0
@@ -134,44 +166,18 @@ def parse_clippy_json(content: str, source: str = "clippy") -> IngestSummary:
         except json.JSONDecodeError:
             continue
 
-        if not isinstance(item, dict) or item.get("reason") != "compiler-message":
+        finding = _extract_clippy_item(item, source)
+        if not finding:
             continue
 
-        msg_obj = item.get("message") or {}
-        if not isinstance(msg_obj, dict):
-            continue
-
-        code_obj = msg_obj.get("code") or {}
-        rule = str(code_obj.get("code") or "clippy-message") if isinstance(code_obj, dict) else "clippy-message"
-        msg = str(msg_obj.get("message") or "")
-        level = str(msg_obj.get("level") or "warning")
-
-        severity: Any = "error" if level == "error" else ("warning" if level == "warning" else "info")
-
-        spans = msg_obj.get("spans") or []
-        file_path = ""
-        line_num = None
-        if isinstance(spans, list) and len(spans) > 0 and isinstance(spans[0], dict):
-            file_path = _normalize_path(str(spans[0].get("file_name") or ""))
-            line_num = spans[0].get("line_start")
-
-        if severity == "error":
+        if finding["severity"] == "error":
             errors += 1
-        elif severity == "warning":
+        elif finding["severity"] == "warning":
             warnings += 1
         else:
             info += 1
 
-        findings.append(
-            {
-                "source": source,
-                "file": file_path,
-                "rule": rule,
-                "severity": severity,
-                "message": msg,
-                "line": line_num,
-            }
-        )
+        findings.append(finding)
 
     status: Any = "violations" if findings else ("clean" if lines else "not_run")
     return {
@@ -181,6 +187,49 @@ def parse_clippy_json(content: str, source: str = "clippy") -> IngestSummary:
         "warnings": warnings,
         "info": info,
         "findings": findings,
+    }
+
+
+def _extract_sarif_location(res: dict[str, Any]) -> tuple[str, int | None]:
+    locations = res.get("locations") or []
+    if not (isinstance(locations, list) and len(locations) > 0 and isinstance(locations[0], dict)):
+        return "", None
+
+    phys = locations[0].get("physicalLocation") or {}
+    if not isinstance(phys, dict):
+        return "", None
+
+    file_path = ""
+    artifact = phys.get("artifactLocation") or {}
+    if isinstance(artifact, dict):
+        file_path = _normalize_path(str(artifact.get("uri") or ""))
+
+    line_num = None
+    region = phys.get("region") or {}
+    if isinstance(region, dict):
+        line_num = region.get("startLine")
+
+    return file_path, line_num
+
+
+def _parse_sarif_result(res: dict[str, Any], source: str) -> Finding | None:
+    if not isinstance(res, dict):
+        return None
+    rule = str(res.get("ruleId") or "sarif-rule")
+    msg_obj = res.get("message") or {}
+    msg = str(msg_obj.get("text") or "") if isinstance(msg_obj, dict) else ""
+    level = str(res.get("level") or "warning").lower()
+
+    severity: Any = "error" if level in ("error", "high") else ("warning" if level in ("warning", "medium") else "info")
+    file_path, line_num = _extract_sarif_location(res)
+
+    return {
+        "source": source,
+        "file": file_path,
+        "rule": rule,
+        "severity": severity,
+        "message": msg,
+        "line": line_num,
     }
 
 
@@ -203,47 +252,18 @@ def parse_sarif(content: str, source: str = "sarif") -> IngestSummary:
             continue
         results = run.get("results") or []
         for res in results:
-            if not isinstance(res, dict):
+            finding = _parse_sarif_result(res, source)
+            if not finding:
                 continue
-            rule = str(res.get("ruleId") or "sarif-rule")
-            msg_obj = res.get("message") or {}
-            msg = str(msg_obj.get("text") or "") if isinstance(msg_obj, dict) else ""
-            level = str(res.get("level") or "warning").lower()
 
-            severity: Any = (
-                "error" if level in ("error", "high") else ("warning" if level in ("warning", "medium") else "info")
-            )
-
-            locations = res.get("locations") or []
-            file_path = ""
-            line_num = None
-            if isinstance(locations, list) and len(locations) > 0 and isinstance(locations[0], dict):
-                phys = locations[0].get("physicalLocation") or {}
-                if isinstance(phys, dict):
-                    artifact = phys.get("artifactLocation") or {}
-                    if isinstance(artifact, dict):
-                        file_path = _normalize_path(str(artifact.get("uri") or ""))
-                    region = phys.get("region") or {}
-                    if isinstance(region, dict):
-                        line_num = region.get("startLine")
-
-            if severity == "error":
+            if finding["severity"] == "error":
                 errors += 1
-            elif severity == "warning":
+            elif finding["severity"] == "warning":
                 warnings += 1
             else:
                 info += 1
 
-            findings.append(
-                {
-                    "source": source,
-                    "file": file_path,
-                    "rule": rule,
-                    "severity": severity,
-                    "message": msg,
-                    "line": line_num,
-                }
-            )
+            findings.append(finding)
 
     status: Any = "violations" if findings else "clean"
     return {
@@ -256,41 +276,7 @@ def parse_sarif(content: str, source: str = "sarif") -> IngestSummary:
     }
 
 
-def ingest_linter_report(report_path: Path, tool_hint: str | None = None) -> IngestSummary:
-    if not report_path.is_file():
-        return {
-            "source": tool_hint or report_path.stem,
-            "status": "not_run",
-            "errors": 0,
-            "warnings": 0,
-            "info": 0,
-            "findings": [],
-        }
-
-    try:
-        content = report_path.read_text()
-    except OSError:
-        return {
-            "source": tool_hint or report_path.stem,
-            "status": "not_run",
-            "errors": 0,
-            "warnings": 0,
-            "info": 0,
-            "findings": [],
-        }
-
-    source_name = tool_hint or report_path.stem.lower()
-
-    if "sarif" in report_path.name.lower() or source_name == "sarif":
-        return parse_sarif(content, source=source_name)
-    if "ruff" in report_path.name.lower() or source_name == "ruff":
-        return parse_ruff_json(content, source=source_name)
-    if "eslint" in report_path.name.lower() or source_name == "eslint":
-        return parse_eslint_json(content, source=source_name)
-    if "clippy" in report_path.name.lower() or source_name == "clippy":
-        return parse_clippy_json(content, source=source_name)
-
-    # Auto-detect JSON content structure
+def _auto_detect_json_linter(content: str, source_name: str) -> IngestSummary | None:
     try:
         parsed = json.loads(content)
         if isinstance(parsed, dict) and "$schema" in parsed and "sarif" in parsed["$schema"].lower():
@@ -305,5 +291,40 @@ def ingest_linter_report(report_path: Path, tool_hint: str | None = None) -> Ing
     except json.JSONDecodeError:
         if "reason" in content and "compiler-message" in content:
             return parse_clippy_json(content, source=source_name)
+    return None
+
+
+def ingest_linter_report(report_path: Path, tool_hint: str | None = None) -> IngestSummary:
+    default_res: IngestSummary = {
+        "source": tool_hint or report_path.stem,
+        "status": "not_run",
+        "errors": 0,
+        "warnings": 0,
+        "info": 0,
+        "findings": [],
+    }
+
+    if not report_path.is_file():
+        return default_res
+
+    try:
+        content = report_path.read_text()
+    except OSError:
+        return default_res
+
+    source_name = tool_hint or report_path.stem.lower()
+
+    if "sarif" in report_path.name.lower() or source_name == "sarif":
+        return parse_sarif(content, source=source_name)
+    if "ruff" in report_path.name.lower() or source_name == "ruff":
+        return parse_ruff_json(content, source=source_name)
+    if "eslint" in report_path.name.lower() or source_name == "eslint":
+        return parse_eslint_json(content, source=source_name)
+    if "clippy" in report_path.name.lower() or source_name == "clippy":
+        return parse_clippy_json(content, source=source_name)
+
+    detected = _auto_detect_json_linter(content, source_name)
+    if detected:
+        return detected
 
     return parse_sarif(content, source=source_name)

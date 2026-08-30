@@ -14,3 +14,11 @@ repos:
     hooks:
       - id: commitizen
         stages: [commit-msg]
+  - repo: local
+    hooks:
+      - id: scopio-check
+        name: scopio quality check (diff --dirty)
+        entry: uv run scopio diff --dirty
+        language: system
+        pass_filenames: false
+
