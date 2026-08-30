@@ -145,12 +145,13 @@ def _parse_lizard_csv(output: str) -> LizardSummary:
 
     lines = [line.strip() for line in output.splitlines() if line.strip()]
     if not lines:
-        return {"nloc": 0, "ccn": 0.0, "warnings": 0, "files": []}
+        return {"nloc": 0, "ccn": 0.0, "warnings": 0, "files": [], "offenders": []}
 
     reader = csv_mod.reader(io.StringIO(output))
     by_path: dict[str, dict[str, Any]] = {}
     total_nloc = 0
     func_ccns: list[float] = []
+    offenders_list: list[dict[str, Any]] = []
     warning_count = 0
 
     for row in reader:
@@ -165,6 +166,10 @@ def _parse_lizard_csv(output: str) -> LizardSummary:
 
         total_nloc += nloc
         func_ccns.append(ccn)
+
+        func_name = str(row[7]) if len(row) >= 8 else "global"
+        start_line = int(row[9]) if len(row) >= 10 and row[9].isdigit() else None
+        offenders_list.append({"file": file_path, "function": func_name, "ccn": ccn, "line": start_line})
 
         entry = by_path.setdefault(
             file_path,
@@ -197,6 +202,8 @@ def _parse_lizard_csv(output: str) -> LizardSummary:
 
     ccn_max = round(max(func_ccns), 1) if func_ccns else 0.0
     aggregated_files = list(by_path.values())
+    offenders_list.sort(key=lambda x: x["ccn"], reverse=True)
+    top_5 = offenders_list[:5]
 
     return {
         "nloc": total_nloc,
@@ -204,6 +211,7 @@ def _parse_lizard_csv(output: str) -> LizardSummary:
         "ccn_max": ccn_max,
         "warnings": warning_count,
         "files": [cast(LizardFile, fm) for fm in aggregated_files],
+        "offenders": [cast(Any, off) for off in top_5],
     }
 
 
@@ -553,6 +561,7 @@ class MetricsAuditor:
                 "ingest_errors": ingest_errors,
                 "ingest_warnings": ingest_warnings,
                 "ingest_findings": ingest_findings,
+                "top_offenders": lizard.get("offenders", []),
             },
         )
 

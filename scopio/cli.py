@@ -67,6 +67,14 @@ def run(ctx: click.Context, verbose: bool, quiet: bool, incremental: bool, json_
                 f"Warnings={r.get('warnings', 0)}, IngestErrors={r.get('ingest_errors', 0)}",
                 err=True,
             )
+            top = r.get("top_offenders") or []
+            if top:
+                click.echo("    Top Complexity Offenders:", err=True)
+                for off in top[:3]:
+                    func = off.get("function") or "global"
+                    f_path = off.get("file") or ""
+                    l_str = f":{off['line']}" if off.get("line") else ""
+                    click.echo(f"      - {f_path}{l_str} -> {func} (CCN={off.get('ccn', 0)})", err=True)
 
     if trend_failures:
         click.echo("\nTrend Gate Failures:", err=True)
@@ -118,8 +126,11 @@ def _resolve_project(ctx: click.Context, project: str | None) -> str:
 @cli.command()
 @click.option("--project", default=None, help="Project name (auto-detected if omitted and single project)")
 @click.option("--limit", default=10, show_default=True, help="Max rows")
+@click.option(
+    "--format", "fmt", type=click.Choice(["text", "json"]), default="text", help="Output format (text or json)"
+)
 @click.pass_context
-def report(ctx: click.Context, project: str | None, limit: int) -> None:
+def report(ctx: click.Context, project: str | None, limit: int, fmt: str) -> None:
     proj_name = _resolve_project(ctx, project)
     db_path = ctx.obj["output_dir"] / "scopio.db"
     with open_db(db_path) as conn:
@@ -137,6 +148,11 @@ def report(ctx: click.Context, project: str | None, limit: int) -> None:
 
     if not rows:
         raise click.ClickException(f"No history for: {proj_name}")
+
+    if fmt == "json":
+        data = [dict(row) for row in rows]
+        click.echo(json.dumps(data, indent=2))
+        return
 
     for row in rows:
         click.echo(

@@ -68,7 +68,9 @@ def test_cli_diff_report_no_db(tmp_path: Path) -> None:
 
 def test_cli_diff_missing_project_option(tmp_path: Path) -> None:
     runner = CliRunner()
-    result = runner.invoke(cli, ["diff"])
+    cfg = tmp_path / "scopio.toml"
+    cfg.write_text('[discovery]\nprojects = ["p1", "p2"]\n', encoding="utf-8")
+    result = runner.invoke(cli, ["--config", str(cfg), "diff"])
     assert result.exit_code != 0
 
 
@@ -155,6 +157,55 @@ def test_cli_doctor() -> None:
     assert result.exit_code == 0
     assert "Scopio Doctor" in result.output
     assert "Python:" in result.output
+
+
+def test_cli_report_json(tmp_path: Path) -> None:
+    """Test scopio report --format json outputs structured JSON history."""
+    import json
+
+    from scopio.db import open_db
+
+    runner = CliRunner()
+    cfg = tmp_path / "scopio.toml"
+    cfg.write_text('[discovery]\nprojects = ["json-report-proj"]\n', encoding="utf-8")
+
+    db_path = tmp_path / "scopio.db"
+    with open_db(db_path) as conn:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS metrics ("
+            "audit_id INTEGER PRIMARY KEY AUTOINCREMENT, project TEXT, language TEXT, "
+            "files INTEGER, loc INTEGER, code INTEGER, nloc INTEGER, "
+            "ccn REAL, ccn_max REAL, warnings INTEGER, commits INTEGER, last_commit_date TEXT, "
+            "author TEXT, branch TEXT, dirty INTEGER, commit_hash TEXT, "
+            "tool_versions TEXT, duration_seconds REAL, runs_count INTEGER DEFAULT 1, "
+            "timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)"
+        )
+        conn.execute(
+            "INSERT INTO metrics (project, language, files, loc, ccn, ccn_max, warnings, branch, commit_hash) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("json-report-proj", "Python", 10, 500, 2.5, 8.0, 0, "main", "def456"),
+        )
+
+    result = runner.invoke(
+        cli,
+        [
+            "--config",
+            str(cfg),
+            "--output-dir",
+            str(tmp_path),
+            "report",
+            "--project",
+            "json-report-proj",
+            "--format",
+            "json",
+        ],
+    )
+    assert result.exit_code == 0
+    parsed = json.loads(result.output)
+    assert isinstance(parsed, list)
+    assert len(parsed) == 1
+    assert parsed[0]["project"] == "json-report-proj"
+    assert parsed[0]["ccn"] == 2.5
 
 
 def test_cli_resolve_project_auto(tmp_path: Path) -> None:

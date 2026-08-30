@@ -26,12 +26,20 @@ class LizardFile(TypedDict, total=False):
     warnings: int
 
 
+class FunctionOffender(TypedDict, total=False):
+    file: str
+    function: str
+    ccn: float
+    line: int | None
+
+
 class LizardSummary(TypedDict, total=False):
     nloc: int
     ccn: float
     ccn_max: float
     warnings: int
     files: list[LizardFile]
+    offenders: list[FunctionOffender]
 
 
 class FileMetric(TypedDict, total=False):
@@ -70,6 +78,7 @@ class AuditResult(TypedDict, total=False):
     ingest_errors: int
     ingest_warnings: int
     ingest_findings: list[dict[str, Any]]
+    top_offenders: list[FunctionOffender]
 
 
 class DiffDelta(TypedDict, total=False):

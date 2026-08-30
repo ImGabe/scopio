@@ -158,6 +158,22 @@ def test_language_from_scc_empty() -> None:
     assert _language_from_scc([], {"JSON"}) == "Unknown"
 
 
+def test_parse_lizard_csv_top_offenders() -> None:
+    csv_output = (
+        "10,12.0,100,2,15,loc,src/app.py,complex_fn,complex_fn_long,25,40\n"
+        "5,3.0,30,1,10,loc,src/utils.py,simple_fn,simple_fn_long,5,15\n"
+        "20,25.0,200,4,30,loc,src/core.py,heavy_fn,heavy_fn_long,100,130\n"
+    )
+    result = _parse_lizard_csv(csv_output)
+    assert result["nloc"] == 35
+    assert result["ccn_max"] == 25.0
+    offenders = result.get("offenders", [])
+    assert len(offenders) == 3
+    assert offenders[0]["function"] == "heavy_fn"
+    assert offenders[0]["ccn"] == 25.0
+    assert offenders[0]["file"] == "src/core.py"
+
+
 # ─── _git_info ────────────────────────────────────────────────────────────
 
 
