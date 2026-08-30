@@ -308,8 +308,8 @@ def ingest_linter_report(report_path: Path, tool_hint: str | None = None) -> Ing
         return default_res
 
     try:
-        content = report_path.read_text()
-    except OSError:
+        content = report_path.read_text(encoding="utf-8", errors="replace")
+    except (OSError, UnicodeDecodeError):
         return default_res
 
     source_name = tool_hint or report_path.stem.lower()

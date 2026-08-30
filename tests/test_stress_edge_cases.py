@@ -125,3 +125,63 @@ def test_provocation_4_multilanguage_monorepo_ingestion(tmp_path: Path, monkeypa
     assert audited["ingest_errors"] == 2  # 1 from ESLint + 1 from SARIF
     assert audited["ingest_warnings"] == 3  # 1 from Ruff + 1 from ESLint + 1 from Clippy
     assert len(audited["ingest_findings"]) == 5  # Total findings across all linters
+
+
+def test_provocation_1_monorepo_concurrency(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stress Test Provocation 1: 20 parallel projects auditing concurrently into SQLite."""
+    projects = []
+    projects_dir = tmp_path / "monorepo"
+    projects_dir.mkdir()
+
+    for i in range(20):
+        p_name = f"subproj-{i:02d}"
+        projects.append(p_name)
+        p_path = projects_dir / p_name
+        p_path.mkdir()
+        (p_path / "main.py").write_text(f"# Subproject {i}\nx = {i}\n")
+
+    cfg = tmp_path / "scopio.toml"
+    cfg.write_text(f"[discovery]\nprojects = {json.dumps(projects)}\n")
+
+    auditor = MetricsAuditor(cfg, projects_dir, tmp_path / "out")
+
+    monkeypatch.setattr(
+        "scopio.audit._run_scc", lambda path, excludes: [{"Name": "Python", "Lines": 10, "Code": 8, "Count": 1}]
+    )
+    monkeypatch.setattr(
+        "scopio.audit._run_lizard", lambda path, excludes: {"nloc": 5, "ccn": 1.0, "warnings": 0, "files": []}
+    )
+    monkeypatch.setattr("scopio.audit._tool_versions", lambda: {"scc": "v3", "lizard": "v1"})
+    monkeypatch.setattr("scopio.audit.shutil.which", lambda cmd: "/usr/bin/" + cmd)
+
+    # Execute concurrent audit across 20 parallel projects
+    summary = auditor.run(verbose=False, quiet=True, incremental=False)
+    assert len(summary["results"]) == 20
+    assert summary["observability"]["projects_processed"] == 20
+    assert summary["observability"]["projects_failed"] == 0
+
+
+def test_provocation_2_corrupted_linter_reports(tmp_path: Path) -> None:
+    """Stress Test Provocation 2: Handling truncated JSON, binary data, and malformed linter reports gracefully."""
+    from scopio.collect.ingest.parsers import ingest_linter_report
+
+    # 1. Truncated JSON file
+    trunc_file = tmp_path / "truncated.json"
+    trunc_file.write_text('{"code": "E501", "filename": "app.py"')
+    res1 = ingest_linter_report(trunc_file, tool_hint="ruff")
+    assert res1["status"] in ("clean", "not_run")
+    assert len(res1["findings"]) == 0
+
+    # 2. Binary / non-UTF-8 file
+    bin_file = tmp_path / "corrupted.bin"
+    bin_file.write_bytes(b"\x80\x81\xff\x00\xfe\xfd\xfa\xfb")
+    res2 = ingest_linter_report(bin_file, tool_hint="sarif")
+    assert res2["status"] == "not_run"
+    assert len(res2["findings"]) == 0
+
+    # 3. Plain text / non-JSON file pretending to be ESLint
+    txt_file = tmp_path / "eslint_text.txt"
+    txt_file.write_text("Fatal crash error in compiler on line 42")
+    res3 = ingest_linter_report(txt_file, tool_hint="eslint")
+    assert res3["status"] in ("clean", "not_run")
+    assert len(res3["findings"]) == 0
